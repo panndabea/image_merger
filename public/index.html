@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Image Combiner</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f0f2f5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+      color: #1a1a2e;
+    }
+
+    h1 { font-size: 2rem; margin-bottom: 0.25rem; }
+    p.subtitle { color: #555; margin-bottom: 2rem; }
+
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,.08);
+      padding: 2rem;
+      width: 100%;
+      max-width: 640px;
+    }
+
+    .drop-zone {
+      border: 2px dashed #a0a8b8;
+      border-radius: 8px;
+      padding: 2rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+    }
+    .drop-zone:hover, .drop-zone.dragover {
+      border-color: #4f8ef7;
+      background: #f0f6ff;
+    }
+    .drop-zone svg { width: 48px; height: 48px; color: #4f8ef7; margin-bottom: .75rem; }
+    .drop-zone p { color: #555; }
+    .drop-zone span { color: #4f8ef7; font-weight: 600; }
+
+    #file-input { display: none; }
+
+    #preview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+      gap: .75rem;
+      margin-top: 1.25rem;
+    }
+    .thumb-wrap {
+      position: relative;
+      border-radius: 6px;
+      overflow: hidden;
+      aspect-ratio: 1;
+      background: #eee;
+    }
+    .thumb-wrap img {
+      width: 100%; height: 100%;
+      object-fit: cover;
+    }
+    .thumb-wrap button {
+      position: absolute; top: 4px; right: 4px;
+      background: rgba(0,0,0,.55); color: #fff;
+      border: none; border-radius: 50%;
+      width: 22px; height: 22px;
+      font-size: .75rem; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      line-height: 1;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-top: 1.25rem;
+      flex-wrap: wrap;
+    }
+
+    label.layout-label { font-size: .9rem; font-weight: 600; }
+    select#layout {
+      padding: .4rem .75rem;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      font-size: .9rem;
+    }
+
+    button#combine-btn {
+      margin-left: auto;
+      background: #4f8ef7;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: .65rem 1.5rem;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    button#combine-btn:hover { background: #2f6fd6; }
+    button#combine-btn:disabled { background: #aac4f7; cursor: not-allowed; }
+
+    #status {
+      margin-top: 1rem;
+      font-size: .9rem;
+      color: #e05;
+      min-height: 1.2em;
+    }
+
+    #result-section { margin-top: 2rem; width: 100%; max-width: 640px; display: none; }
+    #result-section h2 { margin-bottom: .75rem; }
+    #result-img {
+      width: 100%;
+      border-radius: 10px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.12);
+    }
+    #download-btn {
+      display: inline-block;
+      margin-top: 1rem;
+      background: #2ecc71;
+      color: #fff;
+      padding: .6rem 1.4rem;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    #download-btn:hover { background: #27ae60; }
+  </style>
+</head>
+<body>
+
+<h1>🖼️ Image Combiner</h1>
+<p class="subtitle">Upload multiple images and merge them into one</p>
+
+<div class="card">
+  <div class="drop-zone" id="drop-zone">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+        d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+    </svg>
+    <p><span>Click to select</span> or drag &amp; drop images here</p>
+    <p style="font-size:.8rem;margin-top:.5rem;color:#888">PNG, JPG, WEBP — up to 20 MB each</p>
+  </div>
+
+  <input type="file" id="file-input" accept="image/*" multiple />
+
+  <div id="preview-grid"></div>
+
+  <div class="controls">
+    <label class="layout-label" for="layout">Layout:</label>
+    <select id="layout">
+      <option value="horizontal">Horizontal (side by side)</option>
+      <option value="vertical">Vertical (stacked)</option>
+    </select>
+    <button id="combine-btn" disabled>Combine Images</button>
+  </div>
+
+  <div id="status"></div>
+</div>
+
+<div id="result-section">
+  <h2>Combined Result</h2>
+  <img id="result-img" alt="Combined image" />
+  <br />
+  <a id="download-btn" download="combined.png">⬇ Download</a>
+</div>
+
+<script>
+  const dropZone = document.getElementById('drop-zone');
+  const fileInput = document.getElementById('file-input');
+  const previewGrid = document.getElementById('preview-grid');
+  const combineBtn = document.getElementById('combine-btn');
+  const statusEl = document.getElementById('status');
+  const resultSection = document.getElementById('result-section');
+  const resultImg = document.getElementById('result-img');
+  const downloadBtn = document.getElementById('download-btn');
+
+  let files = [];
+
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    addFiles([...e.dataTransfer.files]);
+  });
+  fileInput.addEventListener('change', () => {
+    addFiles([...fileInput.files]);
+    fileInput.value = '';
+  });
+
+  function addFiles(newFiles) {
+    const images = newFiles.filter(f => f.type.startsWith('image/'));
+    images.forEach(f => {
+      files.push(f);
+      renderThumb(f, files.length - 1);
+    });
+    updateBtn();
+  }
+
+  function renderThumb(file, index) {
+    const url = URL.createObjectURL(file);
+    const wrap = document.createElement('div');
+    wrap.className = 'thumb-wrap';
+    wrap.dataset.index = index;
+    wrap.innerHTML = `<img src="${url}" alt="preview" /><button title="Remove">✕</button>`;
+    wrap.querySelector('button').addEventListener('click', () => removeFile(wrap));
+    previewGrid.appendChild(wrap);
+  }
+
+  function removeFile(wrap) {
+    const idx = parseInt(wrap.dataset.index, 10);
+    files[idx] = null;
+    wrap.remove();
+    updateBtn();
+  }
+
+  function updateBtn() {
+    const count = files.filter(Boolean).length;
+    combineBtn.disabled = count < 2;
+    statusEl.textContent = '';
+  }
+
+  combineBtn.addEventListener('click', async () => {
+    const validFiles = files.filter(Boolean);
+    if (validFiles.length < 2) return;
+
+    combineBtn.disabled = true;
+    statusEl.textContent = 'Combining…';
+    resultSection.style.display = 'none';
+
+    const layout = document.getElementById('layout').value;
+    const formData = new FormData();
+    validFiles.forEach(f => formData.append('images', f));
+
+    try {
+      const res = await fetch(`/combine?layout=${layout}`, { method: 'POST', body: formData });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(err.error || res.statusText);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      resultImg.src = url;
+      downloadBtn.href = url;
+      resultSection.style.display = 'block';
+      statusEl.textContent = '';
+      resultSection.scrollIntoView({ behavior: 'smooth' });
+    } catch (err) {
+      statusEl.textContent = `Error: ${err.message}`;
+    } finally {
+      combineBtn.disabled = false;
+      updateBtn();
+    }
+  });
+</script>
+
+</body>
+</html>
