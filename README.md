@@ -2,8 +2,9 @@
 
 > **Upload multiple images → get one combined PNG back — instantly, in your browser.**
 
-silver-engine is a small Node.js web application powered by [Express](https://expressjs.com/) and [sharp](https://sharp.pixelplumbing.com/).  
-Users pick any number of images through a drag-and-drop UI, choose a layout (horizontal or vertical), and receive a lossless PNG they can preview and **download** with one click.
+silver-engine is a **pure static web app** — no server, no build step, no Node.js.  
+Users pick any number of images through a drag-and-drop UI, choose a layout (horizontal or vertical), and receive a lossless PNG they can preview and **download** with one click.  
+All image processing happens locally in the browser using the built-in [Canvas API](https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API) — your files are never uploaded anywhere.
 
 ---
 
@@ -12,14 +13,11 @@ Users pick any number of images through a drag-and-drop UI, choose a layout (hor
 1. [Features](#features)  
 2. [Quick Start](#quick-start)  
 3. [Using the App](#using-the-app)  
-4. [API Reference](#api-reference)  
-5. [Project Structure](#project-structure)  
-6. [Architecture & Design Decisions](#architecture--design-decisions)  
-7. [Configuration](#configuration)  
-8. [Running Tests](#running-tests)  
-9. [Deployment (Render)](#deployment-render)  
-10. [Contributing](#contributing)  
-11. [Technology Stack](#technology-stack)  
+4. [Project Structure](#project-structure)  
+5. [Architecture & Design Decisions](#architecture--design-decisions)  
+6. [Deployment](#deployment)  
+7. [Contributing](#contributing)  
+8. [Technology Stack](#technology-stack)  
 
 ---
 
@@ -27,128 +25,51 @@ Users pick any number of images through a drag-and-drop UI, choose a layout (hor
 
 | Feature | Details |
 |---------|---------|
-| **Multi-image upload** | Drag & drop or click to select — up to 50 images, 20 MB each |
+| **Multi-image upload** | Drag & drop or click to select — any number of images |
 | **Two layouts** | Horizontal (side-by-side) or vertical (stacked) |
 | **Live preview** | Thumbnails appear immediately; individual images can be removed before combining |
 | **One-click download** | After combining, a **Download combined.png** button saves the result locally |
-| **Server-side composition** | Uses libvips via sharp — fast even for large images |
-| **Stateless** | No files are ever written to disk; uploads live only in RAM for the duration of the request |
-| **Zero client-side dependencies** | The front-end is plain HTML + CSS + vanilla JS |
+| **100 % client-side** | Uses the Canvas API — no server, no uploads, no Node.js |
+| **Zero dependencies** | Plain HTML + CSS + vanilla JS — open the file and it works |
 
 ---
 
 ## Quick Start
 
-**Prerequisites:** [Node.js](https://nodejs.org/) ≥ 18
+No installation required.
 
-```bash
-# 1. Clone the repo
-git clone https://github.com/panndabea/silver-engine.git
-cd silver-engine
+**Option A — open directly in your browser:**
 
-# 2. Install dependencies
-npm install
-
-# 3. Start the development server
-npm start
+```
+public/index.html
 ```
 
-Open **http://localhost:3000** in your browser.
+Double-click `public/index.html` (or drag it into your browser) and the app is ready to use.
+
+**Option B — serve locally with any static HTTP server:**
+
+```bash
+# Python (built-in)
+python3 -m http.server 3000 --directory public
+
+# Node.js (npx, no install)
+npx serve public
+```
+
+Then open **http://localhost:3000** in your browser.
 
 ---
 
 ## Using the App
 
 1. **Select images** — click the upload area or drag files onto it.  
-   Supported formats: PNG, JPEG, WEBP, AVIF, TIFF, GIF (anything libvips understands), and **HEIC/HEIF** (Apple device photos — converted automatically on the server).
+   Supported formats: any image type your browser supports (PNG, JPEG, WEBP, AVIF, GIF, …).
 2. **Remove unwanted images** — click the **✕** button on a thumbnail.
 3. **Choose a layout**:
    - *Horizontal* — images placed side-by-side, left to right.
    - *Vertical* — images stacked top to bottom.
-4. **Click "Combine Images"** — the server processes the files and returns the combined PNG.
+4. **Click "Combine Images"** — your browser composites the images on a `<canvas>` element.
 5. **Preview & download** — the result appears below the card. Click **⬇ Download combined.png** to save the file.
-
----
-
-## API Reference
-
-### `POST /combine`
-
-Combines uploaded images into a single PNG and returns it as a file download.
-
-#### Request
-
-| Part | Value |
-|------|-------|
-| Method | `POST` |
-| Content-Type | `multipart/form-data` |
-| Field name | `images` (repeat for each file) |
-| Minimum files | 2 |
-| Maximum files | 50 |
-| Maximum file size | 20 MB per file |
-
-#### Query Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `layout` | `"horizontal"` \| `"vertical"` | `"horizontal"` | Composition direction |
-
-#### Responses
-
-**200 OK** — Combined PNG returned as a download.
-
-```
-Content-Type: image/png
-Content-Disposition: attachment; filename="combined.png"
-<binary PNG data>
-```
-
-**400 Bad Request** — Fewer than 2 images supplied.
-
-```json
-{ "error": "Please upload at least 2 images." }
-```
-
-**500 Internal Server Error** — Unexpected processing failure.
-
-```json
-{ "error": "Failed to combine images." }
-```
-
-#### Example — cURL
-
-```bash
-curl -X POST "http://localhost:3000/combine?layout=horizontal" \
-  -F "images=@photo1.jpg" \
-  -F "images=@photo2.jpg" \
-  --output combined.png
-```
-
-#### Example — JavaScript (Fetch API)
-
-```js
-const formData = new FormData();
-formData.append('images', file1);
-formData.append('images', file2);
-
-const response = await fetch('/combine?layout=vertical', {
-  method: 'POST',
-  body: formData,
-});
-
-if (!response.ok) {
-  const { error } = await response.json();
-  throw new Error(error);
-}
-
-// Save the PNG
-const blob = await response.blob();
-const url  = URL.createObjectURL(blob);
-const a    = document.createElement('a');
-a.href     = url;
-a.download = 'combined.png';
-a.click();
-```
 
 ---
 
@@ -156,54 +77,29 @@ a.click();
 
 ```
 silver-engine/
-├── lib/
-│   └── combineImages.js   # Core image-composition logic (sharp wrapper)
 ├── public/
-│   └── index.html         # Single-page front-end (HTML + CSS + vanilla JS)
-├── test/
-│   ├── combine.test.js    # Unit tests for combineImages()
-│   └── server.test.js     # Integration tests for the HTTP server
-├── server.js              # Express app entry-point
-├── package.json
-├── render.yaml            # Render.com deployment manifest
+│   └── index.html   # The entire app — HTML + CSS + vanilla JS in one file
+├── render.yaml      # Render.com static-site deployment manifest
 └── README.md
 ```
-
-### Module responsibilities
-
-| File | Responsibility |
-|------|---------------|
-| `server.js` | HTTP layer — routing, file parsing (multer), error handling, starting the server |
-| `lib/combineImages.js` | Pure image-processing function; knows nothing about HTTP |
-| `public/index.html` | Complete browser UI; communicates with the server via Fetch API |
-| `test/combine.test.js` | Unit tests — verify pixel dimensions of the combined output |
-| `test/server.test.js` | Integration tests — verify HTTP status codes, headers (including `Content-Disposition`) |
 
 ---
 
 ## Architecture & Design Decisions
 
-### Why in-memory uploads?
+### Why client-side only?
 
-`multer` is configured with `memoryStorage()`.  Files are held in RAM only for the duration of a single request.  This means:
+All image composition is performed with the browser's native Canvas API:
 
-- No temporary files to clean up.
-- No persistent storage required on the host.
-- Compatible with ephemeral file-systems like Render's free tier.
+1. Each selected `File` is decoded into an `HTMLImageElement` via an object URL.
+2. A `<canvas>` is sized to fit all images in the chosen layout.
+3. Each image is drawn with `ctx.drawImage()`.
+4. `canvas.toBlob('image/png')` exports the result as a downloadable PNG.
 
-The trade-off is that very large batches of large images will consume more RAM.  The 20 MB per-file and 50-file limits keep this bounded.
-
-### Why `Content-Disposition: attachment`?
-
-Without this header, navigating directly to `/combine` in a browser would display the PNG inline.  Setting `Content-Disposition: attachment; filename="combined.png"` ensures the browser always treats the response as a file download.  The front-end also sets a blob URL + HTML `download` attribute for the same reason — both mechanisms reinforce each other.
-
-### Why is `server.js` exportable?
-
-`server.js` calls `app.listen()` only when it is run directly (`require.main === module`).  When required by tests, the app is exported without binding a port.  Integration tests can then call `app.listen(0)` to let the OS assign an ephemeral port, run assertions, and close the server cleanly — no port collisions, no test isolation issues.
-
-### Why no front-end framework?
-
-The UI has no significant state-management complexity, no routing, and no component tree.  A framework would add build tooling, bundle steps, and dependencies without meaningfully improving the experience.  Plain HTML + CSS + JS is readable, debuggable without dev-tools extensions, and loads in milliseconds.
+This means:
+- **No server required** — the app works offline, from `file://`, or from any CDN.
+- **Privacy** — images never leave the user's device.
+- **Zero latency** — no upload/download round-trip.
 
 ### Blob URL lifecycle management
 
@@ -211,80 +107,53 @@ Each time the user combines a new set of images, the previous blob URL is revoke
 
 ---
 
-## Configuration
+## Deployment
 
-| Environment variable | Default | Description |
-|---------------------|---------|-------------|
-| `PORT` | `3000` | TCP port the server listens on. Set automatically by Render. |
-| `NODE_ENV` | *(unset)* | Set to `production` by Render; not used by application logic directly but may affect express internals. |
+Because the app is a single static HTML file, it can be hosted anywhere:
 
----
+| Platform | How |
+|----------|-----|
+| **GitHub Pages** | Push to a repo → enable Pages → point to the `public/` folder (or root) |
+| **Netlify / Vercel** | Connect repo → set publish directory to `public` |
+| **Render** | `render.yaml` is already configured for static hosting |
+| **Any CDN** | Upload `public/index.html` |
 
-## Running Tests
+### Render
 
-```bash
-npm test
-```
-
-This runs all `*.test.js` files under `test/` using Node's built-in test runner (available since Node 18 — no extra packages needed).
-
-### Test coverage areas
-
-| Test file | What it covers |
-|-----------|---------------|
-| `test/combine.test.js` | Horizontal layout dimensions, vertical layout dimensions, height-is-max rule, three-image combination |
-| `test/server.test.js` | `Content-Disposition: attachment` header, `Content-Type: image/png`, 400 on < 2 images, correct pixel dimensions through the full HTTP stack |
-
----
-
-## Deployment (Render)
-
-The `render.yaml` file at the project root is a [Render Blueprint](https://render.com/docs/blueprint-spec).  To deploy:
-
-1. Push this repository to GitHub.
-2. Create a new **Web Service** on [render.com](https://render.com), connecting it to the repo.
-3. Render will detect `render.yaml` and configure the service automatically.
+The `render.yaml` at the project root is a [Render Blueprint](https://render.com/docs/blueprint-spec):
 
 ```yaml
-# render.yaml (summary)
 services:
   - type: web
     name: silver-engine
-    runtime: node
-    buildCommand: npm install
-    startCommand: node server.js
-    envVars:
-      - key: NODE_ENV
-        value: production
+    runtime: static
+    staticPublishPath: public
 ```
 
-Render sets the `PORT` environment variable; `server.js` reads it automatically.
+To deploy: push to GitHub, create a new **Static Site** on [render.com](https://render.com), and connect the repo — no build command needed.
 
 ---
 
 ## Contributing
 
 1. **Fork** the repository and create a feature branch.
-2. Make your changes, ensuring `npm test` passes.
+2. Open `public/index.html` in your browser to test changes directly.
 3. Keep pull requests focused — one concern per PR.
-4. Write or update tests for any changed behaviour.
 
 ### Coding conventions
 
-- `'use strict'` at the top of every `.js` file.
-- JSDoc on every exported function and non-trivial internal function.
+- No build tools, no bundlers, no frameworks — keep it a single self-contained HTML file.
+- JSDoc on every non-trivial function.
 - Inline comments explain *why*, not *what*.
-- No third-party testing libraries — use `node:test` + `node:assert/strict`.
 
 ---
 
 ## Technology Stack
 
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| Runtime | [Node.js](https://nodejs.org/) | ≥ 18 |
-| HTTP framework | [Express](https://expressjs.com/) | ^5 |
-| File upload middleware | [multer](https://github.com/expressjs/multer) | ^2 |
-| Image processing | [sharp](https://sharp.pixelplumbing.com/) (libvips) | ^0.34 |
-| Testing | `node:test` + `node:assert/strict` | built-in |
-| Deployment | [Render](https://render.com/) | — |
+| Layer | Technology |
+|-------|-----------|
+| UI | Plain HTML5 + CSS3 |
+| Logic | Vanilla JavaScript (ES2020+) |
+| Image processing | [Canvas API](https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API) (built into every modern browser) |
+| Deployment | [Render](https://render.com/) static hosting |
+
