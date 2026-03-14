@@ -12,9 +12,15 @@
  *      responds with a download-ready PNG.
  *
  * ## Key design decisions
- * - **In-memory storage** — uploaded files are kept in RAM via
- *   `multer.memoryStorage()` and never written to disk.  This keeps the
- *   server stateless and Render-friendly.
+ * - **Disk-based upload storage** — uploaded files are written to the OS temp
+ *   directory (`os.tmpdir()`) by multer and deleted after each request.  This
+ *   keeps large images (e.g. 10 MB) out of the Node.js heap, which is critical
+ *   on the 0.5 GB Render free-tier.
+ * - **Single libvips thread** — `sharp.concurrency(1)` limits the underlying
+ *   libvips thread-pool to one thread, preventing CPU throttling on a 1/8 CPU
+ *   allocation.
+ * - **No libvips cache** — `sharp.cache(false)` disables the libvips operation
+ *   cache so processed pixel data is not retained in RAM between requests.
  * - **Content-Disposition: attachment** — the response header tells browsers
  *   to treat the response as a file download, not an inline resource, making
  *   the download flow work even when the API endpoint is called directly.
@@ -22,10 +28,34 @@
  * @module server
  */
 
+const os = require('node:os');
+const fs = require('node:fs');
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
+const sharp = require('sharp');
+const rateLimit = require('express-rate-limit');
 const { combineImages } = require('./lib/combineImages');
+
+// ── libvips / sharp resource limits ──────────────────────────────────────────
+// Constrained Render free-tier environment: 1/8 CPU, 0.5 GB RAM.
+// concurrency(1) — keep the libvips thread-pool at a single thread so the
+//   process doesn't compete with itself on a fractional CPU allocation.
+// cache(false)   — disable libvips's operation cache entirely; we process each
+//   request once and discard the result, so caching only wastes RAM.
+sharp.concurrency(1);
+sharp.cache(false);
+
+// ── Rate limiter ──────────────────────────────────────────────────────────────
+// Protect the combine endpoint against bursts that would exhaust the limited
+// CPU and RAM on the Render free tier (1/8 CPU, 0.5 GB RAM).
+// Allow up to 20 combine requests per IP per minute.
+const combineLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 const app = express();
 
@@ -39,18 +69,22 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 /**
- * Multer middleware configured for **in-memory** multipart/form-data parsing.
+ * Multer middleware configured to write uploads to the OS temp directory
+ * instead of holding them in Node.js heap memory.  Disk-based storage means
+ * that large files (e.g. 10 MB images) are never resident in RAM while they
+ * wait to be processed, which is critical on a 0.5 GB RAM host.
  *
  * Constraints applied here:
- * - `fileSize` — 20 MB per file to prevent memory exhaustion.
- * - `fileFilter` — rejects non-image MIME types early, before the buffer is
- *   even allocated, so the client receives a clear 400-level error.
+ * - `fileSize` — 10 MB per file; generous enough for typical use while
+ *   preventing a single upload from exhausting the available RAM.
+ * - `fileFilter` — rejects non-image MIME types early, before any bytes are
+ *   written to disk, so the client receives a clear 400-level error.
  *
  * @type {import('multer').Multer}
  */
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB per file
+  dest: os.tmpdir(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per file
   fileFilter(_req, file, cb) {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
@@ -66,8 +100,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 /**
  * POST /combine
  *
- * Accepts 2–50 image files via `multipart/form-data` (field name `images`),
+ * Accepts 2–20 image files via `multipart/form-data` (field name `images`),
  * combines them into a single PNG, and returns the result as a file download.
+ * A maximum of 20 files keeps peak memory within the 0.5 GB RAM budget.
  *
  * ### Query parameters
  * | Name     | Values                    | Default      |
@@ -98,16 +133,19 @@ app.use(express.static(path.join(__dirname, 'public')));
  * @param {import('express').Request}  req
  * @param {import('express').Response} res
  */
-app.post('/combine', upload.array('images', 50), async (req, res) => {
-  const files = req.files;
-
-  if (!files || files.length < 2) {
-    return res.status(400).json({ error: 'Please upload at least 2 images.' });
-  }
+app.post('/combine', combineLimiter, upload.array('images', 20), async (req, res) => {
+  // Collect temp-file paths so we can always delete them when we're done,
+  // regardless of whether the request succeeds or fails.  Filter out any
+  // entries that don't have a path (e.g. files rejected mid-stream).
+  const tmpPaths = (req.files ?? []).map((f) => f.path).filter(Boolean);
 
   try {
+    if (tmpPaths.length < 2) {
+      return res.status(400).json({ error: 'Please upload at least 2 images.' });
+    }
+
     const layout = req.query.layout === 'vertical' ? 'vertical' : 'horizontal';
-    const combined = await combineImages(files.map((f) => f.buffer), layout);
+    const combined = await combineImages(tmpPaths, layout);
 
     // Tell the browser this is a downloadable file, not an inline resource.
     // The front-end also uses a blob URL + the HTML `download` attribute for
@@ -119,6 +157,17 @@ app.post('/combine', upload.array('images', 50), async (req, res) => {
   } catch (err) {
     console.error('Error combining images:', err);
     res.status(500).json({ error: 'Failed to combine images.' });
+  } finally {
+    // Remove every temp file written by multer, whether the request succeeded,
+    // failed, or was rejected early.  ENOENT is silently ignored (the file was
+    // already cleaned up or was never written); any other error is logged.
+    for (const p of tmpPaths) {
+      fs.unlink(p, (err) => {
+        if (err && err.code !== 'ENOENT') {
+          console.error(`Failed to delete temp file ${p}:`, err);
+        }
+      });
+    }
   }
 });
 
