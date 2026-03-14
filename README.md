@@ -1,8 +1,8 @@
-# silver-engine
+# zaladuplo
 
 > **Upload multiple images → get one combined PNG back — instantly, in your browser.**
 
-silver-engine is a **pure static web app** — no server, no build step, no Node.js.  
+zaladuplo is a **pure static web app** — no server, no build step, no Node.js.  
 Users pick any number of images through a drag-and-drop UI, choose a layout (horizontal or vertical), and receive a lossless PNG they can preview and **download** with one click.  
 All image processing happens locally in the browser using the built-in [Canvas API](https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API) — your files are never uploaded anywhere.
 
@@ -76,7 +76,7 @@ Then open **http://localhost:3000** in your browser.
 ## Project Structure
 
 ```
-silver-engine/
+zaladuplo/
 ├── public/
 │   └── index.html   # The entire app — HTML + CSS + vanilla JS in one file
 ├── render.yaml      # Render.com static-site deployment manifest
@@ -125,7 +125,7 @@ The `render.yaml` at the project root is a [Render Blueprint](https://render.com
 ```yaml
 services:
   - type: web
-    name: silver-engine
+    name: zaladuplo
     runtime: static
     staticPublishPath: public
 ```
