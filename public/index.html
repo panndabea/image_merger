@@ -224,7 +224,7 @@
         d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
     </svg>
     <p><span>Click to select</span> or drag &amp; drop images here</p>
-    <p style="font-size:.8rem;margin-top:.5rem;color:#888">PNG, JPG, WEBP, HEIC/HEIF — up to 10 MB each</p>
+    <p style="font-size:.8rem;margin-top:.5rem;color:#888">PNG, JPG, WEBP — processed locally in your browser</p>
   </div>
 
   <input type="file" id="file-input" accept="image/*" multiple />
@@ -387,7 +387,6 @@
   let _countdownInterval = null;
   let _rafId = null;
   let _processStart = 0;
-  let _lastImageCount = 0;
 
   /**
    * Shows the top progress bar and the in-card processing state card with a
@@ -415,7 +414,6 @@
     etaBadge.textContent = `~${estimatedSecs}s`;
     etaBadge.classList.remove('done');
     processingState.classList.add('visible');
-    _lastImageCount = imageCount;
 
     // Countdown timer
     let remaining = estimatedSecs;
@@ -464,41 +462,82 @@
     processingState.classList.remove('visible');
   }
 
-  // ─── Push notifications ───────────────────────────────────────────────────
+  // ─── Combine & download ───────────────────────────────────────────────────
 
   /**
-   * Requests browser notification permission if it hasn't been granted yet.
-   * Must be called from a user-gesture handler (e.g. button click).
+   * Loads a File as a fully decoded HTMLImageElement.
+   * @param {File} file
+   * @returns {Promise<HTMLImageElement>}
    */
-  async function requestNotificationPermission() {
-    if (!('Notification' in window)) return;
-    if (Notification.permission === 'default') {
-      await Notification.requestPermission();
-    }
-  }
-
-  /**
-   * Fires a browser push notification indicating the image is ready.
-   * Includes the count of combined images so the message is informative.
-   */
-  function sendNotification() {
-    if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    const n = _lastImageCount;
-    new Notification('Images Combined! ✨', {
-      body: `${n} image${n !== 1 ? 's' : ''} merged — ready to download.`,
-      icon: '/favicon.ico',
-      tag: 'combine-done',
+  function loadImage(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error(`Could not load "${file.name}". The format may not be supported by your browser.`));
+      };
+      img.src = url;
     });
   }
 
-  // ─── Combine & download ───────────────────────────────────────────────────
+  /**
+   * Combines image Files into a single PNG Blob using the Canvas API.
+   * All processing happens locally in the browser — no data is uploaded.
+   *
+   * @param {File[]} imageFiles
+   * @param {'horizontal'|'vertical'} layout
+   * @returns {Promise<Blob>}
+   */
+  async function combineImages(imageFiles, layout) {
+    const images = await Promise.all(imageFiles.map(loadImage));
+
+    if (images.length === 0) {
+      throw new Error('No images to combine.');
+    }
+
+    let canvasWidth, canvasHeight;
+    if (layout === 'vertical') {
+      canvasWidth  = Math.max(...images.map(img => img.naturalWidth));
+      canvasHeight = images.reduce((sum, img) => sum + img.naturalHeight, 0);
+    } else {
+      canvasWidth  = images.reduce((sum, img) => sum + img.naturalWidth, 0);
+      canvasHeight = Math.max(...images.map(img => img.naturalHeight));
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width  = canvasWidth;
+    canvas.height = canvasHeight;
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    let x = 0, y = 0;
+    for (const img of images) {
+      ctx.drawImage(img, x, y);
+      if (layout === 'vertical') {
+        y += img.naturalHeight;
+      } else {
+        x += img.naturalWidth;
+      }
+    }
+
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(blob => {
+        if (blob) resolve(blob);
+        else reject(new Error('Failed to export the combined image.'));
+      }, 'image/png');
+    });
+  }
 
   combineBtn.addEventListener('click', async () => {
     const validFiles = files.filter(Boolean);
     if (validFiles.length < 2) return;
-
-    // Request notification permission while we have a user gesture.
-    await requestNotificationPermission();
 
     combineBtn.disabled = true;
     statusEl.textContent = '';
@@ -508,18 +547,9 @@
     startProcessingUI(estimated, validFiles.length);
 
     const layout = document.getElementById('layout').value;
-    const formData = new FormData();
-    validFiles.forEach(f => formData.append('images', f));
 
     try {
-      const res = await fetch(`/combine?layout=${layout}`, { method: 'POST', body: formData });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(err.error || res.statusText);
-      }
-
-      const blob = await res.blob();
+      const blob = await combineImages(validFiles, layout);
 
       // Revoke any previous blob URL to free memory before creating a new one.
       if (currentResultUrl) {
@@ -532,13 +562,10 @@
 
       // Wire the download button.  Using the blob URL + the HTML `download`
       // attribute triggers a save-file dialog with the provided filename.
-      // This works in all modern browsers for same-origin blob URLs.
       downloadBtn.href = currentResultUrl;
 
       resultSection.style.display = 'block';
       resultSection.scrollIntoView({ behavior: 'smooth' });
-
-      sendNotification();
     } catch (err) {
       statusEl.textContent = `Error: ${err.message}`;
     } finally {
