@@ -36,6 +36,7 @@ const path = require('path');
 const sharp = require('sharp');
 const rateLimit = require('express-rate-limit');
 const { combineImages } = require('./lib/combineImages');
+const { maybeConvertHeic } = require('./lib/convertHeic');
 
 // ── libvips / sharp resource limits ──────────────────────────────────────────
 // Constrained Render free-tier environment: 1/8 CPU, 0.5 GB RAM.
@@ -86,6 +87,8 @@ const PORT = process.env.PORT || 3000;
  *   preventing a single upload from exhausting the available RAM.
  * - `fileFilter` — rejects non-image MIME types early, before any bytes are
  *   written to disk, so the client receives a clear 400-level error.
+ *   HEIC/HEIF files (common on Apple devices) are accepted and automatically
+ *   converted to JPEG by `lib/convertHeic.js` before composition.
  *
  * @type {import('multer').Multer}
  */
@@ -93,13 +96,6 @@ const upload = multer({
   dest: os.tmpdir(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per file
   fileFilter(_req, file, cb) {
-    // HEIF/HEIC images (common on Apple devices) require a libvips build with
-    // HEIF codec support that is not available on this deployment.  Reject them
-    // early with a clear message so the user knows to convert first.
-    const unsupportedMimetypes = ['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence'];
-    if (unsupportedMimetypes.includes(file.mimetype)) {
-      return cb(new Error('HEIC/HEIF images are not supported. Please convert to JPEG or PNG first.'));
-    }
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
@@ -159,7 +155,21 @@ app.post('/combine', combineLimiter, upload.array('images', 20), async (req, res
     }
 
     const layout = req.query.layout === 'vertical' ? 'vertical' : 'horizontal';
-    const combined = await combineImages(tmpPaths, layout);
+
+    // Convert any HEIC/HEIF uploads to JPEG buffers before compositing.
+    // Non-HEIC files are passed through as file-system paths so no extra I/O
+    // is needed for the common case.  If heic-convert cannot decode a file
+    // the error propagates here and is surfaced as a 400 to the client.
+    let inputs;
+    try {
+      inputs = await Promise.all(
+        req.files.map((f) => maybeConvertHeic(f.path, f.mimetype))
+      );
+    } catch (convErr) {
+      return res.status(400).json({ error: convErr.message });
+    }
+
+    const combined = await combineImages(inputs, layout);
 
     // Tell the browser this is a downloadable file, not an inline resource.
     // The front-end also uses a blob URL + the HTML `download` attribute for
