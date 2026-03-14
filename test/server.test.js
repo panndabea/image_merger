@@ -94,6 +94,53 @@ function postImages(url, imgBufs, layout = 'horizontal') {
   });
 }
 
+/**
+ * Like `postImages`, but lets the caller specify a custom MIME type and
+ * filename for each part.  Used to test file-filter rejection paths.
+ *
+ * @param {string} url
+ * @param {{ buf: Buffer, mimetype: string, filename: string }[]} files
+ * @returns {Promise<{ res: http.IncomingMessage, body: Buffer }>}
+ */
+function postImagesWithMimetype(url, files) {
+  return new Promise((resolve, reject) => {
+    const boundary = '----TestBoundaryMime' + Date.now();
+
+    const parts = files.map(({ buf, mimetype, filename }) => {
+      const header = Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="images"; filename="${filename}"\r\n` +
+        `Content-Type: ${mimetype}\r\n\r\n`
+      );
+      const footer = Buffer.from('\r\n');
+      return Buffer.concat([header, buf, footer]);
+    });
+    const closing = Buffer.from(`--${boundary}--\r\n`);
+    const bodyBuf = Buffer.concat([...parts, closing]);
+
+    const parsedUrl = new URL(url);
+    const options = {
+      hostname: parsedUrl.hostname,
+      port:     parsedUrl.port,
+      path:     parsedUrl.pathname,
+      method:   'POST',
+      headers: {
+        'Content-Type':   `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': bodyBuf.length,
+      },
+    };
+
+    const req = http.request(options, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ res, body: Buffer.concat(chunks) }));
+    });
+    req.on('error', reject);
+    req.write(bodyBuf);
+    req.end();
+  });
+}
+
 // ─── Test lifecycle ───────────────────────────────────────────────────────────
 
 /** @type {http.Server} */
@@ -166,4 +213,51 @@ test('POST /combine vertical layout returns correct dimensions', async () => {
   const meta = await sharp(body).metadata();
   assert.equal(meta.width, 30);
   assert.equal(meta.height, 30);
+});
+
+test('POST /combine rejects HEIC files with 400 and an informative error message', async () => {
+  // Simulate an Apple HEIC upload (the server never decodes the bytes, so
+  // any non-empty buffer with the correct MIME type is sufficient here).
+  const fakeHeicBuf = Buffer.from('not-real-heic-data');
+
+  const { res, body } = await postImagesWithMimetype(`${baseUrl}/combine`, [
+    { buf: fakeHeicBuf, mimetype: 'image/heic', filename: 'photo.heic' },
+    { buf: fakeHeicBuf, mimetype: 'image/heic', filename: 'photo2.heic' },
+  ]);
+
+  assert.equal(res.statusCode, 400);
+  const json = JSON.parse(body.toString());
+  assert.ok(
+    typeof json.error === 'string' && json.error.toLowerCase().includes('heic'),
+    'Error message should mention HEIC'
+  );
+});
+
+test('POST /combine rejects HEIF files with 400 and an informative error message', async () => {
+  const fakeHeifBuf = Buffer.from('not-real-heif-data');
+
+  const { res, body } = await postImagesWithMimetype(`${baseUrl}/combine`, [
+    { buf: fakeHeifBuf, mimetype: 'image/heif', filename: 'photo.heif' },
+    { buf: fakeHeifBuf, mimetype: 'image/heif', filename: 'photo2.heif' },
+  ]);
+
+  assert.equal(res.statusCode, 400);
+  const json = JSON.parse(body.toString());
+  assert.ok(
+    typeof json.error === 'string' && json.error.toLowerCase().includes('heif'),
+    'Error message should mention HEIF'
+  );
+});
+
+test('POST /combine rejects non-image files with 400', async () => {
+  const textBuf = Buffer.from('hello world');
+
+  const { res, body } = await postImagesWithMimetype(`${baseUrl}/combine`, [
+    { buf: textBuf, mimetype: 'text/plain', filename: 'notes.txt' },
+    { buf: textBuf, mimetype: 'text/plain', filename: 'notes2.txt' },
+  ]);
+
+  assert.equal(res.statusCode, 400);
+  const json = JSON.parse(body.toString());
+  assert.ok(typeof json.error === 'string', 'Response body should include an error message');
 });

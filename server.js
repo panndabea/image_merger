@@ -46,6 +46,15 @@ const { combineImages } = require('./lib/combineImages');
 sharp.concurrency(1);
 sharp.cache(false);
 
+const app = express();
+
+// ── Reverse-proxy trust ───────────────────────────────────────────────────────
+// Render (and most PaaS providers) sit behind a load-balancer that appends the
+// real client IP to the X-Forwarded-For header.  Telling Express to trust the
+// first proxy hop lets express-rate-limit read the correct client IP and
+// suppresses its ERR_ERL_UNEXPECTED_X_FORWARDED_FOR validation error.
+app.set('trust proxy', 1);
+
 // ── Rate limiter ──────────────────────────────────────────────────────────────
 // Protect the combine endpoint against bursts that would exhaust the limited
 // CPU and RAM on the Render free tier (1/8 CPU, 0.5 GB RAM).
@@ -56,8 +65,6 @@ const combineLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-
-const app = express();
 
 /**
  * TCP port the HTTP server binds to.
@@ -86,6 +93,13 @@ const upload = multer({
   dest: os.tmpdir(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per file
   fileFilter(_req, file, cb) {
+    // HEIF/HEIC images (common on Apple devices) require a libvips build with
+    // HEIF codec support that is not available on this deployment.  Reject them
+    // early with a clear message so the user knows to convert first.
+    const unsupportedMimetypes = ['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence'];
+    if (unsupportedMimetypes.includes(file.mimetype)) {
+      return cb(new Error('HEIC/HEIF images are not supported. Please convert to JPEG or PNG first.'));
+    }
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
@@ -169,6 +183,15 @@ app.post('/combine', combineLimiter, upload.array('images', 20), async (req, res
       });
     }
   }
+});
+
+// ── Multer / file-filter error handler ───────────────────────────────────────
+// When multer's fileFilter calls cb(new Error(...)), Express receives a
+// four-argument error-handling middleware call.  We surface that as a 400 so
+// the client gets a meaningful message instead of a generic 500.
+// eslint-disable-next-line no-unused-vars
+app.use((err, _req, res, _next) => {
+  return res.status(400).json({ error: err.message });
 });
 
 // Start listening only when this file is run directly (not when it is
