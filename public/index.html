@@ -121,7 +121,9 @@
       box-shadow: 0 2px 12px rgba(0,0,0,.12);
     }
     #download-btn {
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      gap: .4rem;
       margin-top: 1rem;
       background: #2ecc71;
       color: #fff;
@@ -129,6 +131,9 @@
       border-radius: 8px;
       text-decoration: none;
       font-weight: 600;
+      cursor: pointer;
+      border: none;
+      font-size: 1rem;
     }
     #download-btn:hover { background: #27ae60; }
   </style>
@@ -168,34 +173,65 @@
   <h2>Combined Result</h2>
   <img id="result-img" alt="Combined image" />
   <br />
-  <a id="download-btn" download="combined.png">⬇ Download</a>
+  <a id="download-btn" download="combined.png">⬇ Download combined.png</a>
 </div>
 
 <script>
-  const dropZone = document.getElementById('drop-zone');
-  const fileInput = document.getElementById('file-input');
-  const previewGrid = document.getElementById('preview-grid');
-  const combineBtn = document.getElementById('combine-btn');
-  const statusEl = document.getElementById('status');
+  // ─── Element references ───────────────────────────────────────────────────
+  const dropZone     = document.getElementById('drop-zone');
+  const fileInput    = document.getElementById('file-input');
+  const previewGrid  = document.getElementById('preview-grid');
+  const combineBtn   = document.getElementById('combine-btn');
+  const statusEl     = document.getElementById('status');
   const resultSection = document.getElementById('result-section');
-  const resultImg = document.getElementById('result-img');
-  const downloadBtn = document.getElementById('download-btn');
+  const resultImg    = document.getElementById('result-img');
+  const downloadBtn  = document.getElementById('download-btn');
 
+  /**
+   * Holds the File objects chosen by the user.
+   * Slots may be `null` when the user removes an image (avoids re-indexing).
+   * @type {(File|null)[]}
+   */
   let files = [];
 
+  /**
+   * The blob URL currently shown in the result section.
+   * Tracked so it can be revoked before creating a new one, preventing
+   * memory leaks in long-lived sessions.
+   * @type {string|null}
+   */
+  let currentResultUrl = null;
+
+  // ─── Drop-zone interactions ───────────────────────────────────────────────
   dropZone.addEventListener('click', () => fileInput.click());
-  dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+
+  dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.classList.add('dragover');
+  });
+
   dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+
   dropZone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropZone.classList.remove('dragover');
     addFiles([...e.dataTransfer.files]);
   });
+
   fileInput.addEventListener('change', () => {
     addFiles([...fileInput.files]);
+    // Reset the input so the same file can be re-added after removal.
     fileInput.value = '';
   });
 
+  // ─── File management ──────────────────────────────────────────────────────
+
+  /**
+   * Filters new files to images only, adds them to the `files` array,
+   * renders thumbnail previews, and refreshes the Combine button state.
+   *
+   * @param {File[]} newFiles - Raw File objects from an input or drop event.
+   */
   function addFiles(newFiles) {
     const images = newFiles.filter(f => f.type.startsWith('image/'));
     images.forEach(f => {
@@ -205,8 +241,17 @@
     updateBtn();
   }
 
+  /**
+   * Creates a thumbnail card for a single image file and appends it to the
+   * preview grid.  Each card holds an object URL that is valid for the
+   * lifetime of the page.
+   *
+   * @param {File}   file  - The image file to preview.
+   * @param {number} index - The file's index in the `files` array, stored as
+   *                         a data attribute so the remove handler can find it.
+   */
   function renderThumb(file, index) {
-    const url = URL.createObjectURL(file);
+    const url  = URL.createObjectURL(file);
     const wrap = document.createElement('div');
     wrap.className = 'thumb-wrap';
     wrap.dataset.index = index;
@@ -215,6 +260,13 @@
     previewGrid.appendChild(wrap);
   }
 
+  /**
+   * Nullifies the file at the given index and removes the thumbnail element.
+   * Using `null` instead of `.splice()` preserves the indices stored on other
+   * thumbnail cards.
+   *
+   * @param {HTMLElement} wrap - The `.thumb-wrap` element to remove.
+   */
   function removeFile(wrap) {
     const idx = parseInt(wrap.dataset.index, 10);
     files[idx] = null;
@@ -222,11 +274,17 @@
     updateBtn();
   }
 
+  /**
+   * Enables or disables the Combine button based on the number of selected
+   * (non-null) files, and clears any previous status message.
+   */
   function updateBtn() {
     const count = files.filter(Boolean).length;
     combineBtn.disabled = count < 2;
     statusEl.textContent = '';
   }
+
+  // ─── Combine & download ───────────────────────────────────────────────────
 
   combineBtn.addEventListener('click', async () => {
     const validFiles = files.filter(Boolean);
@@ -242,14 +300,28 @@
 
     try {
       const res = await fetch(`/combine?layout=${layout}`, { method: 'POST', body: formData });
+
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Unknown error' }));
         throw new Error(err.error || res.statusText);
       }
+
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      resultImg.src = url;
-      downloadBtn.href = url;
+
+      // Revoke any previous blob URL to free memory before creating a new one.
+      if (currentResultUrl) {
+        URL.revokeObjectURL(currentResultUrl);
+      }
+      currentResultUrl = URL.createObjectURL(blob);
+
+      // Show the result image.
+      resultImg.src = currentResultUrl;
+
+      // Wire the download button.  Using the blob URL + the HTML `download`
+      // attribute triggers a save-file dialog with the provided filename.
+      // This works in all modern browsers for same-origin blob URLs.
+      downloadBtn.href = currentResultUrl;
+
       resultSection.style.display = 'block';
       statusEl.textContent = '';
       resultSection.scrollIntoView({ behavior: 'smooth' });
