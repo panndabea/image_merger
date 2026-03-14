@@ -113,6 +113,78 @@
       min-height: 1.2em;
     }
 
+    /* ─── Top progress bar ───────────────────────────────────────────── */
+    #top-progress {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%;
+      height: 3px;
+      z-index: 1000;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .25s;
+    }
+    #top-progress.active { opacity: 1; }
+    #top-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #4f8ef7 0%, #a78bfa 50%, #4f8ef7 100%);
+      background-size: 200% 100%;
+      border-radius: 0 2px 2px 0;
+      transition: width .4s ease;
+    }
+    #top-progress.active #top-progress-fill {
+      animation: progress-shimmer 1.8s linear infinite;
+    }
+    @keyframes progress-shimmer {
+      0%   { background-position: 0% 0; }
+      100% { background-position: 200% 0; }
+    }
+
+    /* ─── Processing state card ──────────────────────────────────────── */
+    #processing-state {
+      display: none;
+      align-items: center;
+      gap: .75rem;
+      margin-top: 1rem;
+      padding: .75rem 1rem;
+      background: #f4f7ff;
+      border: 1px solid #dce6ff;
+      border-radius: 8px;
+      font-size: .9rem;
+      color: #3a4a6b;
+    }
+    #processing-state.visible { display: flex; }
+
+    .spinner {
+      flex-shrink: 0;
+      width: 18px; height: 18px;
+      border: 2.5px solid #c7d7f9;
+      border-top-color: #4f8ef7;
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .processing-label { flex: 1; }
+
+    .eta-badge {
+      font-size: .8rem;
+      font-weight: 600;
+      color: #4f8ef7;
+      background: #dce9ff;
+      padding: .15rem .65rem;
+      border-radius: 999px;
+      min-width: 3.5rem;
+      text-align: center;
+      letter-spacing: .02em;
+      transition: background .3s;
+    }
+    .eta-badge.done {
+      color: #2ecc71;
+      background: #d4f7e6;
+    }
+
     #result-section { margin-top: 2rem; width: 100%; max-width: 640px; display: none; }
     #result-section h2 { margin-bottom: .75rem; }
     #result-img {
@@ -139,6 +211,8 @@
   </style>
 </head>
 <body>
+
+<div id="top-progress"><div id="top-progress-fill"></div></div>
 
 <h1>🖼️ Image Combiner</h1>
 <p class="subtitle">Upload multiple images and merge them into one</p>
@@ -167,6 +241,12 @@
   </div>
 
   <div id="status"></div>
+
+  <div id="processing-state">
+    <span class="spinner"></span>
+    <span class="processing-label" id="processing-label">Processing images…</span>
+    <span class="eta-badge" id="eta-badge"></span>
+  </div>
 </div>
 
 <div id="result-section">
@@ -178,14 +258,20 @@
 
 <script>
   // ─── Element references ───────────────────────────────────────────────────
-  const dropZone     = document.getElementById('drop-zone');
-  const fileInput    = document.getElementById('file-input');
-  const previewGrid  = document.getElementById('preview-grid');
-  const combineBtn   = document.getElementById('combine-btn');
-  const statusEl     = document.getElementById('status');
+  const dropZone      = document.getElementById('drop-zone');
+  const fileInput     = document.getElementById('file-input');
+  const previewGrid   = document.getElementById('preview-grid');
+  const combineBtn    = document.getElementById('combine-btn');
+  const statusEl      = document.getElementById('status');
   const resultSection = document.getElementById('result-section');
-  const resultImg    = document.getElementById('result-img');
-  const downloadBtn  = document.getElementById('download-btn');
+  const resultImg     = document.getElementById('result-img');
+  const downloadBtn   = document.getElementById('download-btn');
+
+  const topProgress     = document.getElementById('top-progress');
+  const topProgressFill = document.getElementById('top-progress-fill');
+  const processingState = document.getElementById('processing-state');
+  const processingLabel = document.getElementById('processing-label');
+  const etaBadge        = document.getElementById('eta-badge');
 
   /**
    * Holds the File objects chosen by the user.
@@ -284,15 +370,142 @@
     statusEl.textContent = '';
   }
 
+  // ─── Processing UI ────────────────────────────────────────────────────────
+
+  /**
+   * Estimates processing time in seconds based on image count and total size.
+   * Clamps to 3–20 seconds to stay informative without being misleading.
+   *
+   * @param {File[]} imageFiles
+   * @returns {number}
+   */
+  function estimateSeconds(imageFiles) {
+    const totalMB = imageFiles.reduce((sum, f) => sum + f.size, 0) / (1024 * 1024);
+    return Math.max(3, Math.min(20, Math.round(2 + 0.6 * imageFiles.length + 1.5 * totalMB)));
+  }
+
+  let _countdownInterval = null;
+  let _rafId = null;
+  let _processStart = 0;
+  let _lastImageCount = 0;
+
+  /**
+   * Shows the top progress bar and the in-card processing state card with a
+   * live countdown.  Animates the progress bar smoothly over `estimatedSecs`.
+   *
+   * @param {number} estimatedSecs - Estimated processing duration.
+   * @param {number} imageCount    - Number of images being combined.
+   */
+  function startProcessingUI(estimatedSecs, imageCount) {
+    // Top progress bar
+    topProgressFill.style.transition = 'none';
+    topProgressFill.style.width = '0%';
+    // Force reflow: reading offsetWidth flushes pending style changes so the
+    // width reset above is committed before the transition is re-enabled.
+    // Without this, the browser may batch the reset and the animation together,
+    // skipping the 0% → 5% transition entirely.
+    void topProgressFill.offsetWidth;
+    topProgressFill.style.transition = 'width .4s ease';
+    topProgress.classList.add('active');
+    // Kick off at 5 % immediately so users see instant feedback.
+    topProgressFill.style.width = '5%';
+
+    // Processing state card
+    processingLabel.textContent = `Processing ${imageCount} image${imageCount !== 1 ? 's' : ''}…`;
+    etaBadge.textContent = `~${estimatedSecs}s`;
+    etaBadge.classList.remove('done');
+    processingState.classList.add('visible');
+    _lastImageCount = imageCount;
+
+    // Countdown timer
+    let remaining = estimatedSecs;
+    _countdownInterval = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        etaBadge.textContent = 'almost…';
+        clearInterval(_countdownInterval);
+        _countdownInterval = null;
+      } else {
+        etaBadge.textContent = `~${remaining}s`;
+      }
+    }, 1000);
+
+    // Smooth progress bar animation (ease-out, stops at ~85 %)
+    _processStart = performance.now();
+    const totalMs = estimatedSecs * 1000;
+
+    function animateBar(now) {
+      const fraction = Math.min((now - _processStart) / totalMs, 1);
+      const eased = 1 - Math.pow(1 - fraction, 2); // ease-out quad
+      topProgressFill.style.width = `${5 + eased * 80}%`;
+      if (fraction < 1) {
+        _rafId = requestAnimationFrame(animateBar);
+      }
+    }
+    _rafId = requestAnimationFrame(animateBar);
+  }
+
+  /**
+   * Completes and hides the processing UI.
+   */
+  function stopProcessingUI() {
+    clearInterval(_countdownInterval);
+    _countdownInterval = null;
+    cancelAnimationFrame(_rafId);
+    _rafId = null;
+
+    // Flash to 100 % then fade out.
+    topProgressFill.style.width = '100%';
+    setTimeout(() => {
+      topProgress.classList.remove('active');
+      setTimeout(() => { topProgressFill.style.width = '0%'; }, 300);
+    }, 400);
+
+    processingState.classList.remove('visible');
+  }
+
+  // ─── Push notifications ───────────────────────────────────────────────────
+
+  /**
+   * Requests browser notification permission if it hasn't been granted yet.
+   * Must be called from a user-gesture handler (e.g. button click).
+   */
+  async function requestNotificationPermission() {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'default') {
+      await Notification.requestPermission();
+    }
+  }
+
+  /**
+   * Fires a browser push notification indicating the image is ready.
+   * Includes the count of combined images so the message is informative.
+   */
+  function sendNotification() {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const n = _lastImageCount;
+    new Notification('Images Combined! ✨', {
+      body: `${n} image${n !== 1 ? 's' : ''} merged — ready to download.`,
+      icon: '/favicon.ico',
+      tag: 'combine-done',
+    });
+  }
+
   // ─── Combine & download ───────────────────────────────────────────────────
 
   combineBtn.addEventListener('click', async () => {
     const validFiles = files.filter(Boolean);
     if (validFiles.length < 2) return;
 
+    // Request notification permission while we have a user gesture.
+    await requestNotificationPermission();
+
     combineBtn.disabled = true;
-    statusEl.textContent = 'Combining…';
+    statusEl.textContent = '';
     resultSection.style.display = 'none';
+
+    const estimated = estimateSeconds(validFiles);
+    startProcessingUI(estimated, validFiles.length);
 
     const layout = document.getElementById('layout').value;
     const formData = new FormData();
@@ -323,11 +536,13 @@
       downloadBtn.href = currentResultUrl;
 
       resultSection.style.display = 'block';
-      statusEl.textContent = '';
       resultSection.scrollIntoView({ behavior: 'smooth' });
+
+      sendNotification();
     } catch (err) {
       statusEl.textContent = `Error: ${err.message}`;
     } finally {
+      stopProcessingUI();
       combineBtn.disabled = false;
       updateBtn();
     }
