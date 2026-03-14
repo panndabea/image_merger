@@ -60,7 +60,7 @@ Open **http://localhost:3000** in your browser.
 ## Using the App
 
 1. **Select images** — click the upload area or drag files onto it.  
-   Supported formats: PNG, JPEG, WEBP, AVIF, TIFF, GIF (anything libvips understands).
+   Supported formats: PNG, JPEG, WEBP, AVIF, TIFF, GIF (anything libvips understands), and **HEIC/HEIF** (Apple device photos — converted automatically on the server).
 2. **Remove unwanted images** — click the **✕** button on a thumbnail.
 3. **Choose a layout**:
    - *Horizontal* — images placed side-by-side, left to right.

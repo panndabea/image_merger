@@ -36,6 +36,7 @@ const path = require('path');
 const sharp = require('sharp');
 const rateLimit = require('express-rate-limit');
 const { combineImages } = require('./lib/combineImages');
+const { HEIC_MIMETYPES, convertHeicToJpeg } = require('./lib/convertHeic');
 
 // ── libvips / sharp resource limits ──────────────────────────────────────────
 // Constrained Render free-tier environment: 1/8 CPU, 0.5 GB RAM.
@@ -93,14 +94,9 @@ const upload = multer({
   dest: os.tmpdir(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per file
   fileFilter(_req, file, cb) {
-    // HEIF/HEIC images (common on Apple devices) require a libvips build with
-    // HEIF codec support that is not available on this deployment.  Reject them
-    // early with a clear message so the user knows to convert first.
-    const unsupportedMimetypes = ['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence'];
-    if (unsupportedMimetypes.includes(file.mimetype)) {
-      return cb(new Error('HEIC/HEIF images are not supported. Please convert to JPEG or PNG first.'));
-    }
-    if (file.mimetype.startsWith('image/')) {
+    // HEIC/HEIF images (common on Apple devices) are accepted and converted
+    // to JPEG automatically before combining.
+    if (HEIC_MIMETYPES.has(file.mimetype) || file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
       cb(new Error('Only image files are allowed'));
@@ -158,8 +154,33 @@ app.post('/combine', combineLimiter, upload.array('images', 20), async (req, res
       return res.status(400).json({ error: 'Please upload at least 2 images.' });
     }
 
+    // Build the inputs array for combineImages.  HEIC/HEIF files (common on
+    // Apple devices) are transparently converted to JPEG buffers using a
+    // WebAssembly-based codec so no native libheif build is required.
+    // Non-HEIC files keep their temp-file path so large images are never fully
+    // loaded into the Node.js heap unless they need conversion.
+    const inputs = await Promise.all(
+      req.files.map(async (file) => {
+        if (!HEIC_MIMETYPES.has(file.mimetype)) {
+          return file.path;
+        }
+        const heicBuf = await fs.promises.readFile(file.path);
+        try {
+          return await convertHeicToJpeg(heicBuf);
+        } catch (convErr) {
+          console.error(`HEIC/HEIF conversion failed for "${file.originalname}":`, convErr);
+          const err = new Error(
+            `Invalid or corrupted HEIC/HEIF file "${file.originalname}". ` +
+            'Please ensure the file is a valid HEIC or HEIF image.'
+          );
+          err.isHeicError = true;
+          throw err;
+        }
+      })
+    );
+
     const layout = req.query.layout === 'vertical' ? 'vertical' : 'horizontal';
-    const combined = await combineImages(tmpPaths, layout);
+    const combined = await combineImages(inputs, layout);
 
     // Tell the browser this is a downloadable file, not an inline resource.
     // The front-end also uses a blob URL + the HTML `download` attribute for
@@ -169,6 +190,9 @@ app.post('/combine', combineLimiter, upload.array('images', 20), async (req, res
     res.set('Content-Disposition', 'attachment; filename="combined.png"');
     res.send(combined);
   } catch (err) {
+    if (err.isHeicError) {
+      return res.status(400).json({ error: err.message });
+    }
     console.error('Error combining images:', err);
     res.status(500).json({ error: 'Failed to combine images.' });
   } finally {
