@@ -215,9 +215,10 @@ test('POST /combine vertical layout returns correct dimensions', async () => {
   assert.equal(meta.height, 30);
 });
 
-test('POST /combine rejects HEIC files with 400 and an informative error message', async () => {
-  // Simulate an Apple HEIC upload (the server never decodes the bytes, so
-  // any non-empty buffer with the correct MIME type is sufficient here).
+test('POST /combine returns 400 for invalid or corrupted HEIC files', async () => {
+  // HEIC files are now accepted and converted automatically.  When the file
+  // data is not valid HEIC, the conversion fails and the server returns a
+  // descriptive 400 error rather than a generic 500.
   const fakeHeicBuf = Buffer.from('not-real-heic-data');
 
   const { res, body } = await postImagesWithMimetype(`${baseUrl}/combine`, [
@@ -233,7 +234,9 @@ test('POST /combine rejects HEIC files with 400 and an informative error message
   );
 });
 
-test('POST /combine rejects HEIF files with 400 and an informative error message', async () => {
+test('POST /combine returns 400 for invalid or corrupted HEIF files', async () => {
+  // HEIF files are accepted and converted automatically.  Invalid/corrupted
+  // HEIF data triggers a descriptive 400 error.
   const fakeHeifBuf = Buffer.from('not-real-heif-data');
 
   const { res, body } = await postImagesWithMimetype(`${baseUrl}/combine`, [
