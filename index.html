@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Image Combiner</title>
+    <script src="https://unpkg.com/heic2any@0.0.4/dist/heic2any.min.js"></script>
     <style>
       *,
       *::before,
@@ -334,6 +335,15 @@
         background: #27ae60;
       }
 
+      .dl-btn-min {
+        background: #8b5cf6;
+        color: #fff;
+      }
+
+      .dl-btn-min:hover {
+        background: #7c3aed;
+      }
+
       .savings-badge {
         background: #e8318a;
         border-radius: 999px;
@@ -374,11 +384,11 @@
         </svg>
         <p><span>Click to select</span> or drag &amp; drop images here</p>
         <p style="font-size: 0.8rem; margin-top: 0.5rem; color: #888">
-          PNG, JPG, WEBP — processed locally in your browser
+          PNG, JPG, WEBP, HEIC — processed locally in your browser
         </p>
       </div>
 
-      <input id="file-input" type="file" accept="image/*" multiple />
+      <input id="file-input" type="file" accept="image/*,.heic,.heif" multiple />
 
       <div id="preview-grid"></div>
 
@@ -417,6 +427,14 @@
           </span>
           <span id="webp-size" class="dl-btn-meta">Optimizing…</span>
         </a>
+
+        <a id="download-min-btn" class="dl-btn dl-btn-min" download="combined">
+          <span class="dl-btn-title"
+            >⬇ Smallest
+            <span id="min-savings-badge" class="savings-badge"></span>
+          </span>
+          <span id="min-size" class="dl-btn-meta">Optimizing…</span>
+        </a>
       </div>
     </div>
 
@@ -440,6 +458,10 @@
       const webpSizeElement = document.getElementById("webp-size");
       const savingsBadge = document.getElementById("savings-badge");
 
+      const downloadMinButton = document.getElementById("download-min-btn");
+      const minSizeElement = document.getElementById("min-size");
+      const minSavingsBadge = document.getElementById("min-savings-badge");
+
       const topProgress = document.getElementById("top-progress");
       const topProgressFill = document.getElementById("top-progress-fill");
       const processingState = document.getElementById("processing-state");
@@ -449,6 +471,7 @@
       let files = [];
       let currentResultUrl = null;
       let currentWebpUrl = null;
+      let currentMinUrl = null;
 
       let countdownInterval = null;
       let progressAnimationFrameId = null;
@@ -469,13 +492,37 @@
       /**
        * @param {File[]} selectedFiles
        */
-      function addFiles(selectedFiles) {
-        selectedFiles
-          .filter((file) => file.type.startsWith("image/"))
-          .forEach((file) => {
+      async function addFiles(selectedFiles) {
+        for (const file of selectedFiles) {
+          const isHeic =
+            file.type === "image/heic" ||
+            file.type === "image/heif" ||
+            /\.(heic|heif)$/i.test(file.name);
+
+          if (isHeic) {
+            statusElement.textContent = `Converting ${file.name}…`;
+            try {
+              const result = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.92 });
+              // heic2any returns an array for multi-image HEIC files; normalise to array.
+              const blobs = Array.isArray(result) ? result : [result];
+              blobs.forEach((convertedBlob, blobIndex) => {
+                const suffix = blobs.length > 1 ? `-${blobIndex + 1}` : "";
+                const convertedFile = new File(
+                  [convertedBlob],
+                  file.name.replace(/\.(heic|heif)$/i, `${suffix}.jpg`),
+                  { type: "image/jpeg" },
+                );
+                files.push(convertedFile);
+                renderThumb(convertedFile, files.length - 1);
+              });
+            } catch (conversionError) {
+              statusElement.textContent = `Could not convert HEIC file: ${file.name}`;
+            }
+          } else if (file.type.startsWith("image/")) {
             files.push(file);
             renderThumb(file, files.length - 1);
-          });
+          }
+        }
 
         updateCombineButtonState();
       }
@@ -668,9 +715,24 @@
       }
 
       /**
+       * @param {boolean} enabled
+       */
+      function setMinButtonEnabled(enabled) {
+        if (enabled) {
+          downloadMinButton.removeAttribute("aria-disabled");
+          downloadMinButton.removeAttribute("role");
+          return;
+        }
+
+        downloadMinButton.removeAttribute("href");
+        downloadMinButton.setAttribute("aria-disabled", "true");
+        downloadMinButton.setAttribute("role", "button");
+      }
+
+      /**
        * @param {File[]} imageFiles
        * @param {"horizontal" | "vertical"} layout
-       * @returns {Promise<{pngBlob: Blob, webpBlob: Blob | null}>}
+       * @returns {Promise<{pngBlob: Blob, webpBlob: Blob | null, minBlob: Blob | null, minType: string | null}>}
        */
       function combineImages(imageFiles, layout) {
         if (imageFiles.length === 0) {
@@ -714,6 +776,8 @@
 
                 let pngBlob;
                 let webpBlob;
+                let minBlob = null;
+                let minType = null;
 
                 try {
                   [pngBlob, webpBlob] = await Promise.all([
@@ -725,7 +789,24 @@
                   webpBlob = null;
                 }
 
-                self.postMessage({ blob: pngBlob, webpBlob });
+                // Generate minimal blob: try JPEG and WebP at lower quality and pick smallest.
+                const minCandidates = [];
+                try {
+                  const jpegBlob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.82 });
+                  minCandidates.push({ blob: jpegBlob, ext: "jpg" });
+                } catch { /* JPEG may not be supported */ }
+                try {
+                  const webpMinBlob = await canvas.convertToBlob({ type: "image/webp", quality: 0.78 });
+                  minCandidates.push({ blob: webpMinBlob, ext: "webp" });
+                } catch { /* WebP may not be supported */ }
+
+                if (minCandidates.length > 0) {
+                  const smallest = minCandidates.reduce((a, b) => (a.blob.size < b.blob.size ? a : b));
+                  minBlob = smallest.blob;
+                  minType = smallest.ext;
+                }
+
+                self.postMessage({ blob: pngBlob, webpBlob, minBlob, minType });
               } catch (error) {
                 self.postMessage({ error: error.message });
               }
@@ -747,7 +828,7 @@
               return;
             }
 
-            resolve({ pngBlob: data.blob, webpBlob: data.webpBlob });
+            resolve({ pngBlob: data.blob, webpBlob: data.webpBlob, minBlob: data.minBlob, minType: data.minType });
           };
 
           worker.onerror = (event) => {
@@ -773,7 +854,7 @@
         startProcessingUI(estimateSeconds(activeFiles), activeFiles.length);
 
         try {
-          const { pngBlob, webpBlob } = await combineImages(activeFiles, layoutSelect.value);
+          const { pngBlob, webpBlob, minBlob, minType } = await combineImages(activeFiles, layoutSelect.value);
 
           if (currentResultUrl) {
             URL.revokeObjectURL(currentResultUrl);
@@ -783,6 +864,10 @@
             URL.revokeObjectURL(currentWebpUrl);
           }
 
+          if (currentMinUrl) {
+            URL.revokeObjectURL(currentMinUrl);
+          }
+
           currentResultUrl = URL.createObjectURL(pngBlob);
           resultImage.src = currentResultUrl;
           downloadButton.href = currentResultUrl;
@@ -790,6 +875,8 @@
 
           savingsBadge.classList.remove("visible");
           webpSizeElement.textContent = "Optimizing…";
+          minSizeElement.textContent = "Optimizing…";
+          minSavingsBadge.classList.remove("visible");
 
           if (webpBlob) {
             currentWebpUrl = URL.createObjectURL(webpBlob);
@@ -810,6 +897,29 @@
             currentWebpUrl = null;
             webpSizeElement.textContent = "Unavailable";
             setWebpButtonEnabled(false);
+          }
+
+          if (minBlob && minType) {
+            currentMinUrl = URL.createObjectURL(minBlob);
+            downloadMinButton.href = currentMinUrl;
+            downloadMinButton.download = `combined.${minType}`;
+            setMinButtonEnabled(true);
+
+            const minSavingsPercentage = pngBlob.size > 0
+              ? Math.round((1 - minBlob.size / pngBlob.size) * 100)
+              : 0;
+
+            if (minSavingsPercentage > 0) {
+              minSizeElement.textContent = `${formatFileSize(minBlob.size)} (${minType.toUpperCase()})`;
+              minSavingsBadge.textContent = `-${minSavingsPercentage}%`;
+              minSavingsBadge.classList.add("visible");
+            } else {
+              minSizeElement.textContent = `${formatFileSize(minBlob.size)} (${minType.toUpperCase()}) — same as PNG`;
+            }
+          } else {
+            currentMinUrl = null;
+            minSizeElement.textContent = "Unavailable";
+            setMinButtonEnabled(false);
           }
 
           resultSection.style.display = "block";
@@ -835,6 +945,10 @@
 
         if (currentWebpUrl) {
           URL.revokeObjectURL(currentWebpUrl);
+        }
+
+        if (currentMinUrl) {
+          URL.revokeObjectURL(currentMinUrl);
         }
       }
 
