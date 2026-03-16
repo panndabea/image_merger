@@ -284,6 +284,13 @@
         display: flex;
       }
 
+      #selection-summary {
+        color: #4b5f89;
+        font-size: 0.9rem;
+        margin-top: 0.5rem;
+        min-height: 1.2rem;
+      }
+
       #preprocess-progress {
         background: #dce6ff;
         border-radius: 999px;
@@ -439,6 +446,7 @@
       </div>
 
       <div id="status" aria-live="polite"></div>
+      <div id="selection-summary" role="status"></div>
 
       <div id="preprocess-state" role="status" aria-live="polite">
         <span class="spinner" aria-hidden="true"></span>
@@ -493,6 +501,7 @@
       const layoutSelect = document.getElementById("layout");
       const combineButton = document.getElementById("combine-btn");
       const statusElement = document.getElementById("status");
+      const selectionSummary = document.getElementById("selection-summary");
 
       const resultSection = document.getElementById("result-section");
       const resultImage = document.getElementById("result-img");
@@ -528,6 +537,7 @@
       let countdownInterval = null;
       let progressAnimationFrameId = null;
       let processStartTime = 0;
+      let preprocessEstimatedSeconds = 0;
 
       /**
        * @param {number} sizeInBytes
@@ -556,8 +566,11 @@
         if (validFiles.length === 0) return;
 
         const total = validFiles.length;
+        const combinedFileCount = files.filter(Boolean).length + total;
+        const estimatedPreprocessSeconds = estimatePreprocessSeconds(validFiles);
+        selectionSummary.textContent = `Selected ${pluralImages(combinedFileCount)} — preprocessing about ${estimatedPreprocessSeconds}s`;
         let processed = 0;
-        showPreprocessUI(total);
+        showPreprocessUI(total, estimatedPreprocessSeconds);
         // Yield to the browser so it can paint the initial preprocessing state
         // before the queue loop starts consuming the JS thread.
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -618,6 +631,7 @@
 
         hidePreprocessUI();
         updateCombineButtonState();
+        updateSelectionSummary();
       }
 
       /**
@@ -661,6 +675,7 @@
 
         thumbWrap.remove();
         updateCombineButtonState();
+        updateSelectionSummary();
       }
 
       function updateCombineButtonState() {
@@ -670,6 +685,16 @@
         statusElement.classList.remove("error");
       }
 
+      function updateSelectionSummary() {
+        const activeFileCount = files.filter(Boolean).length;
+        if (activeFileCount === 0) {
+          selectionSummary.textContent = "";
+          return;
+        }
+
+        selectionSummary.textContent = `${pluralImages(activeFileCount)} ready to combine`;
+      }
+
       /**
        * @param {File[]} imageFiles
        * @returns {number}
@@ -677,6 +702,26 @@
       function estimateSeconds(imageFiles) {
         const totalMegabytes = imageFiles.reduce((sum, file) => sum + file.size, 0) / MB_IN_BYTES;
         return Math.max(3, Math.min(20, Math.round(2 + 0.6 * imageFiles.length + 1.5 * totalMegabytes)));
+      }
+
+      /**
+       * @param {File[]} imageFiles
+       * @returns {number}
+       */
+      function estimatePreprocessSeconds(imageFiles) {
+        const totalMegabytes = imageFiles.reduce((sum, file) => sum + file.size, 0) / MB_IN_BYTES;
+        const heicCount = imageFiles.filter((file) =>
+          file.type === "image/heic" ||
+          file.type === "image/heif" ||
+          /\.(heic|heif)$/i.test(file.name),
+        ).length;
+
+        // Tuned from manual profiling across typical desktop/mobile browsers:
+        // - 0.25s baseline per file for decode/thumbnail work
+        // - 0.3s per MB for IO/decode variance
+        // - +1.4s per HEIC for conversion overhead
+        // Result is clamped to 1..45s to avoid noisy under/over-estimates.
+        return Math.max(1, Math.min(45, Math.round(0.25 * imageFiles.length + 0.3 * totalMegabytes + 1.4 * heicCount)));
       }
 
       /**
@@ -690,8 +735,9 @@
       /**
        * @param {number} total
        */
-      function showPreprocessUI(total) {
-        preprocessLabel.textContent = `Preprocessing 0 / ${pluralImages(total)}…`;
+      function showPreprocessUI(total, estimatedSeconds) {
+        preprocessEstimatedSeconds = estimatedSeconds;
+        preprocessLabel.textContent = `Preprocessing 0 / ${pluralImages(total)} (about ${estimatedSeconds}s)…`;
         preprocessProgressFill.style.width = "0%";
         preprocessState.classList.add("visible");
       }
@@ -701,11 +747,18 @@
        * @param {number} total
        */
       function updatePreprocessUI(done, total) {
-        preprocessLabel.textContent = `Preprocessing ${done} / ${pluralImages(total)}…`;
+        if (total === 0) {
+          return;
+        }
+
+        const remainingSeconds = Math.max(0, Math.ceil(((total - done) / total) * preprocessEstimatedSeconds));
+        const suffix = remainingSeconds > 0 ? ` (~${remainingSeconds}s left)` : "";
+        preprocessLabel.textContent = `Preprocessing ${done} / ${pluralImages(total)}${suffix}…`;
         preprocessProgressFill.style.width = `${Math.round((done / total) * 100)}%`;
       }
 
       function hidePreprocessUI() {
+        preprocessEstimatedSeconds = 0;
         preprocessState.classList.remove("visible");
       }
 
@@ -869,11 +922,14 @@
         return new Promise((resolve, reject) => {
           const workerCode = `
             self.onmessage = async ({ data: { files, layout } }) => {
+              let bitmaps = [];
+              let canvas = null;
+              let context = null;
               try {
                 // Decode images in batches to avoid hitting browser memory /
                 // concurrency limits when many large images are uploaded.
                 const BITMAP_BATCH = 8;
-                const bitmaps = [];
+                bitmaps = [];
                 for (let i = 0; i < files.length; i += BITMAP_BATCH) {
                   const batch = await Promise.all(
                     files.slice(i, i + BITMAP_BATCH).map((f) => createImageBitmap(f)),
@@ -893,8 +949,8 @@
                   canvasHeight = Math.max(...bitmaps.map((bitmap) => bitmap.height));
                 }
 
-                const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
-                const context = canvas.getContext("2d");
+                canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
+                context = canvas.getContext("2d");
 
                 context.fillStyle = "#ffffff";
                 context.fillRect(0, 0, canvasWidth, canvasHeight);
@@ -916,26 +972,63 @@
                 let minBlob = null;
                 let minType = null;
 
-                try {
-                  [pngBlob, webpBlob] = await Promise.all([
-                    canvas.convertToBlob({ type: "image/png" }),
-                    canvas.convertToBlob({ type: "image/webp", quality: 0.92 }),
-                  ]);
-                } catch {
-                  pngBlob = await canvas.convertToBlob({ type: "image/png" });
-                  webpBlob = null;
-                }
+                const encodeBlob = async (targetCanvas, type, quality) => {
+                  try {
+                    const blob = await targetCanvas.convertToBlob({ type, quality });
+                    return blob.type === type ? blob : null;
+                  } catch {
+                    return null;
+                  }
+                };
 
-                // Generate minimal blob: try JPEG and WebP at lower quality and pick smallest.
+                const encodeScaledBlob = async (sourceCanvas, type, quality, scale) => {
+                  if (scale >= 1) {
+                    return encodeBlob(sourceCanvas, type, quality);
+                  }
+
+                  const scaledWidth = Math.max(1, Math.round(sourceCanvas.width * scale));
+                  const scaledHeight = Math.max(1, Math.round(sourceCanvas.height * scale));
+                  const scaledCanvas = new OffscreenCanvas(scaledWidth, scaledHeight);
+                  const scaledContext = scaledCanvas.getContext("2d");
+                  scaledContext.drawImage(sourceCanvas, 0, 0, scaledWidth, scaledHeight);
+                  const blob = await encodeBlob(scaledCanvas, type, quality);
+                  scaledCanvas.width = 1;
+                  scaledCanvas.height = 1;
+                  return blob;
+                };
+
+                pngBlob = await canvas.convertToBlob({ type: "image/png" });
+                // Keep good visual quality while reducing "compressed" result size.
+                const WEBP_PREVIEW_QUALITY = 0.86;
+                webpBlob = await encodeBlob(canvas, "image/webp", WEBP_PREVIEW_QUALITY);
+
+                // Generate minimal blob from more aggressive lossy candidates.
                 const minCandidates = [];
-                try {
-                  const jpegBlob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.82 });
-                  minCandidates.push({ blob: jpegBlob, ext: "jpg" });
-                } catch { /* JPEG may not be supported */ }
-                try {
-                  const webpMinBlob = await canvas.convertToBlob({ type: "image/webp", quality: 0.78 });
-                  minCandidates.push({ blob: webpMinBlob, ext: "webp" });
-                } catch { /* WebP may not be supported */ }
+                // ~20MP raw RGBA is about 80MB, which is where browser memory pressure rises.
+                const HUGE_CANVAS_PIXEL_THRESHOLD = 20_000_000;
+                // Very large canvases are memory heavy in browsers, so also try
+                // downscaled candidates when the output exceeds ~20 MP.
+                const isHugeOutput = canvasWidth * canvasHeight > HUGE_CANVAS_PIXEL_THRESHOLD;
+                const STANDARD_SCALES = [1, 0.9];
+                const HUGE_CANVAS_SCALES = [1, 0.9, 0.8];
+                const scaleCandidates = isHugeOutput ? HUGE_CANVAS_SCALES : STANDARD_SCALES;
+                // Quality ladders are stepped from visually acceptable down to
+                // aggressive compression, then we pick the smallest output.
+                const lossyTargets = [
+                  { type: "image/jpeg", qualities: [0.72, 0.62, 0.52], ext: "jpg" },
+                  { type: "image/webp", qualities: [0.68, 0.56, 0.46], ext: "webp" },
+                ];
+
+                for (const scale of scaleCandidates) {
+                  for (const target of lossyTargets) {
+                    for (const quality of target.qualities) {
+                      const blob = await encodeScaledBlob(canvas, target.type, quality, scale);
+                      if (blob) {
+                        minCandidates.push({ blob, ext: target.ext });
+                      }
+                    }
+                  }
+                }
 
                 if (minCandidates.length > 0) {
                   const smallest = minCandidates.reduce((a, b) => (a.blob.size < b.blob.size ? a : b));
@@ -946,6 +1039,19 @@
                 self.postMessage({ blob: pngBlob, webpBlob, minBlob, minType });
               } catch (error) {
                 self.postMessage({ error: error.message });
+              } finally {
+                // Ensure image decoder resources are released even on early failures.
+                for (const bitmap of bitmaps) {
+                  try { bitmap.close(); } catch { /* no-op */ }
+                }
+
+                if (canvas) {
+                  // Shrink the canvas backing store to release raster/GPU memory.
+                  canvas.width = 1;
+                  canvas.height = 1;
+                }
+
+                context = null;
               }
             };
           `;
