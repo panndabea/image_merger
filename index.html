@@ -1,1 +1,843 @@
-<!DOCTYPE html><html lang="en"><meta charset="UTF-8"><meta name="viewport"content="width=device-width,initial-scale=1"><title>Image Combiner</title><style>*,::after,::before{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f0f2f5;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2rem 1rem;color:#1a1a2e}h1{font-size:2rem;margin-bottom:.25rem}p.subtitle{color:#555;margin-bottom:2rem}.card{background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.08);padding:2rem;width:100%;max-width:640px}.drop-zone{border:2px dashed #a0a8b8;border-radius:8px;padding:2rem;text-align:center;cursor:pointer;transition:border-color .2s,background .2s}.drop-zone.dragover,.drop-zone:hover{border-color:#4f8ef7;background:#f0f6ff}.drop-zone svg{width:48px;height:48px;color:#4f8ef7;margin-bottom:.75rem}.drop-zone p{color:#555}.drop-zone span{color:#4f8ef7;font-weight:600}#file-input{display:none}#preview-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:.75rem;margin-top:1.25rem}.thumb-wrap{position:relative;border-radius:6px;overflow:hidden;aspect-ratio:1;background:#eee}.thumb-wrap img{width:100%;height:100%;object-fit:cover}.thumb-wrap button{position:absolute;top:4px;right:4px;background:rgba(0,0,0,.55);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:.75rem;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}.controls{display:flex;align-items:center;gap:1rem;margin-top:1.25rem;flex-wrap:wrap}label.layout-label{font-size:.9rem;font-weight:600}select#layout{padding:.4rem .75rem;border-radius:6px;border:1px solid #ccc;font-size:.9rem}button#combine-btn{margin-left:auto;background:#4f8ef7;color:#fff;border:none;border-radius:8px;padding:.65rem 1.5rem;font-size:1rem;font-weight:600;cursor:pointer;transition:background .2s}button#combine-btn:hover{background:#2f6fd6}button#combine-btn:disabled{background:#aac4f7;cursor:not-allowed}#status{margin-top:1rem;font-size:.9rem;color:#e05;min-height:1.2em}#top-progress{position:fixed;top:0;left:0;width:100%;height:3px;z-index:1000;pointer-events:none;opacity:0;transition:opacity .25s}#top-progress.active{opacity:1}#top-progress-fill{height:100%;width:0%;background:linear-gradient(90deg,#4f8ef7 0,#a78bfa 50%,#4f8ef7 100%);background-size:200% 100%;border-radius:0 2px 2px 0;transition:width .4s ease}#top-progress.active #top-progress-fill{animation:progress-shimmer 1.8s linear infinite}@keyframes progress-shimmer{0%{background-position:0 0}100%{background-position:200% 0}}#processing-state{display:none;align-items:center;gap:.75rem;margin-top:1rem;padding:.75rem 1rem;background:#f4f7ff;border:1px solid #dce6ff;border-radius:8px;font-size:.9rem;color:#3a4a6b}#processing-state.visible{display:flex}.spinner{flex-shrink:0;width:18px;height:18px;border:2.5px solid #c7d7f9;border-top-color:#4f8ef7;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.processing-label{flex:1}.eta-badge{font-size:.8rem;font-weight:600;color:#4f8ef7;background:#dce9ff;padding:.15rem .65rem;border-radius:999px;min-width:3.5rem;text-align:center;letter-spacing:.02em;transition:background .3s}.eta-badge.done{color:#2ecc71;background:#d4f7e6}#result-section{margin-top:2rem;width:100%;max-width:640px;display:none}#result-section h2{margin-bottom:.75rem}#result-img{width:100%;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.12)}.download-options{display:flex;gap:.75rem;margin-top:1rem;flex-wrap:wrap}.dl-btn{display:inline-flex;flex-direction:column;gap:.2rem;padding:.65rem 1.3rem;border-radius:8px;text-decoration:none;font-weight:600;cursor:pointer;border:none;font-size:.9rem;position:relative;transition:background .2s;min-width:140px}.dl-btn-title{display:flex;align-items:center;gap:.35rem;font-size:1rem}.dl-btn-meta{font-size:.75rem;font-weight:400;opacity:.85;min-height:1.1em}.dl-btn-png{background:#4f8ef7;color:#fff}.dl-btn-png:hover{background:#2f6fd6}.dl-btn-webp{background:#2ecc71;color:#fff}.dl-btn-webp:hover{background:#27ae60}.savings-badge{display:none;position:absolute;top:-9px;right:-9px;background:#e8318a;color:#fff;font-size:.7rem;font-weight:700;padding:.1rem .45rem;border-radius:999px;white-space:nowrap;line-height:1.4}.savings-badge.visible{display:block}</style><div id="top-progress"><div id="top-progress-fill"></div></div><h1>🖼️ Image Combiner</h1><p class="subtitle">Upload multiple images and merge them into one<div class="card"><div class="drop-zone"id="drop-zone"><svg xmlns="http://www.w3.org/2000/svg"fill="none"viewBox="0 0 24 24"stroke="currentColor"><path stroke-linecap="round"stroke-linejoin="round"stroke-width="1.5"d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg><p><span>Click to select</span> or drag &amp; drop images here<p style="font-size:.8rem;margin-top:.5rem;color:#888">PNG, JPG, WEBP — processed locally in your browser</div><input type="file"id="file-input"accept="image/*"multiple><div id="preview-grid"></div><div class="controls"><label class="layout-label"for="layout">Layout:</label> <select id="layout"><option value="horizontal">Horizontal (side by side)<option value="vertical">Vertical (stacked)</select> <button id="combine-btn"disabled>Combine Images</button></div><div id="status"></div><div id="processing-state"><span class="spinner"></span> <span class="processing-label"id="processing-label">Processing images…</span> <span class="eta-badge"id="eta-badge"></span></div></div><div id="result-section"><h2>Combined Result</h2><img id="result-img"alt="Combined image"><br><div class="download-options"><a id="download-btn"download="combined.png"class="dl-btn dl-btn-png"><span class="dl-btn-title">⬇ PNG</span><span class="dl-btn-meta"id="png-size"></span></a><a id="download-webp-btn"download="combined.webp"class="dl-btn dl-btn-webp"><span class="dl-btn-title">⬇ WebP<span class="savings-badge"id="savings-badge"></span></span><span class="dl-btn-meta"id="webp-size">Optimizing…</span></a></div></div><script>const dropZone=document.getElementById("drop-zone"),fileInput=document.getElementById("file-input"),previewGrid=document.getElementById("preview-grid"),combineBtn=document.getElementById("combine-btn"),statusEl=document.getElementById("status"),resultSection=document.getElementById("result-section"),resultImg=document.getElementById("result-img"),downloadBtn=document.getElementById("download-btn"),downloadWebpBtn=document.getElementById("download-webp-btn"),pngSizeEl=document.getElementById("png-size"),webpSizeEl=document.getElementById("webp-size"),savingsBadge=document.getElementById("savings-badge"),topProgress=document.getElementById("top-progress"),topProgressFill=document.getElementById("top-progress-fill"),processingState=document.getElementById("processing-state"),processingLabel=document.getElementById("processing-label"),etaBadge=document.getElementById("eta-badge");function fmtSize(e){return e>=1048576?(e/1048576).toFixed(1)+" MB":Math.round(e/1024)+" KB"}let files=[],currentResultUrl=null,currentWebpUrl=null;function addFiles(e){e.filter(e=>e.type.startsWith("image/")).forEach(e=>{files.push(e),renderThumb(e,files.length-1)}),updateBtn()}function renderThumb(e,t){const n=URL.createObjectURL(e),s=document.createElement("div");s.className="thumb-wrap",s.dataset.index=t,s.dataset.url=n,s.innerHTML=`<img src="${n}" alt="preview" /><button title="Remove">✕</button>`,s.querySelector("button").addEventListener("click",()=>removeFile(s)),previewGrid.appendChild(s)}function removeFile(e){const t=parseInt(e.dataset.index,10);files[t]=null,e.dataset.url&&URL.revokeObjectURL(e.dataset.url),e.remove(),updateBtn()}function updateBtn(){const e=files.filter(Boolean).length;combineBtn.disabled=e<2,statusEl.textContent=""}function estimateSeconds(e){const t=e.reduce((e,t)=>e+t.size,0)/1048576;return Math.max(3,Math.min(20,Math.round(2+.6*e.length+1.5*t)))}dropZone.addEventListener("click",()=>fileInput.click()),dropZone.addEventListener("dragover",e=>{e.preventDefault(),dropZone.classList.add("dragover")}),dropZone.addEventListener("dragleave",()=>dropZone.classList.remove("dragover")),dropZone.addEventListener("drop",e=>{e.preventDefault(),dropZone.classList.remove("dragover"),addFiles([...e.dataTransfer.files])}),fileInput.addEventListener("change",()=>{addFiles([...fileInput.files]),fileInput.value=""});let _countdownInterval=null,_rafId=null,_processStart=0;function startProcessingUI(e,t){topProgressFill.style.transition="none",topProgressFill.style.width="0%",topProgressFill.offsetWidth,topProgressFill.style.transition="width .4s ease",topProgress.classList.add("active"),topProgressFill.style.width="5%",processingLabel.textContent=`Processing ${t} image${1!==t?"s":""}…`,etaBadge.textContent=`~${e}s`,etaBadge.classList.remove("done"),processingState.classList.add("visible");let n=e;_countdownInterval=setInterval(()=>{n-=1,n<=0?(etaBadge.textContent="almost…",clearInterval(_countdownInterval),_countdownInterval=null):etaBadge.textContent=`~${n}s`},1e3),_processStart=performance.now();const s=1e3*e;_rafId=requestAnimationFrame(function e(t){const n=Math.min((t-_processStart)/s,1),o=1-Math.pow(1-n,2);topProgressFill.style.width=5+80*o+"%",n<1&&(_rafId=requestAnimationFrame(e))})}function stopProcessingUI(){clearInterval(_countdownInterval),_countdownInterval=null,cancelAnimationFrame(_rafId),_rafId=null,topProgressFill.style.width="100%",setTimeout(()=>{topProgress.classList.remove("active"),setTimeout(()=>{topProgressFill.style.width="0%"},300)},400),processingState.classList.remove("visible")}function combineImages(e,t){return 0===e.length?Promise.reject(new Error("No images to combine.")):new Promise((n,s)=>{const o=URL.createObjectURL(new Blob(['self.onmessage=async({data:{files:e,layout:t}})=>{try{const a=await Promise.all(e.map(e=>createImageBitmap(e)));let s,l;"vertical"===t?(s=Math.max(...a.map(e=>e.width)),l=a.reduce((e,t)=>e+t.height,0)):(s=a.reduce((e,t)=>e+t.width,0),l=Math.max(...a.map(e=>e.height)));const o=new OffscreenCanvas(s,l),c=o.getContext("2d");c.fillStyle="#ffffff",c.fillRect(0,0,s,l);let f=0,i=0;for(const e of a)c.drawImage(e,f,i),"vertical"===t?i+=e.height:f+=e.width,e.close();let r,b;try{[r,b]=await Promise.all([o.convertToBlob({type:"image/png"}),o.convertToBlob({type:"image/webp",quality:.92})])}catch(_){r=await o.convertToBlob({type:"image/png"}),b=null}self.postMessage({blob:r,webpBlob:b})}catch(e){self.postMessage({error:e.message})}};'],{type:"application/javascript"})),r=new Worker(o);r.onmessage=({data:e})=>{URL.revokeObjectURL(o),r.terminate(),e.error?s(new Error(e.error)):n({pngBlob:e.blob,webpBlob:e.webpBlob})},r.onerror=e=>{URL.revokeObjectURL(o),r.terminate(),s(new Error(e.message||"Worker failed to process images."))},r.postMessage({files:e,layout:t})})}combineBtn.addEventListener("click",async()=>{const e=files.filter(Boolean);if(e.length<2)return;combineBtn.disabled=!0,statusEl.textContent="",resultSection.style.display="none";startProcessingUI(estimateSeconds(e),e.length);const t=document.getElementById("layout").value;try{const{pngBlob,webpBlob}=await combineImages(e,t);currentResultUrl&&URL.revokeObjectURL(currentResultUrl),currentWebpUrl&&URL.revokeObjectURL(currentWebpUrl),currentResultUrl=URL.createObjectURL(pngBlob),resultImg.src=currentResultUrl,downloadBtn.href=currentResultUrl,pngSizeEl.textContent=fmtSize(pngBlob.size),savingsBadge.classList.remove("visible"),webpSizeEl.textContent="Optimizing…";if(webpBlob){currentWebpUrl=URL.createObjectURL(webpBlob),downloadWebpBtn.href=currentWebpUrl,webpSizeEl.textContent=fmtSize(webpBlob.size);const pct=pngBlob.size>0?Math.round((1-webpBlob.size/pngBlob.size)*100):0;if(pct>0){savingsBadge.textContent=`-${pct}%`,savingsBadge.classList.add("visible")}}else{webpSizeEl.textContent="Unavailable",downloadWebpBtn.removeAttribute("href"),downloadWebpBtn.setAttribute("aria-disabled","true"),downloadWebpBtn.setAttribute("role","button")}resultSection.style.display="block",resultSection.scrollIntoView({behavior:"smooth"})}catch(e){statusEl.textContent=`Error: ${e.message}`}finally{stopProcessingUI(),combineBtn.disabled=!1,updateBtn()}}),window.addEventListener("pagehide",()=>{document.querySelectorAll(".thumb-wrap[data-url]").forEach(e=>URL.revokeObjectURL(e.dataset.url)),currentResultUrl&&URL.revokeObjectURL(currentResultUrl),currentWebpUrl&&URL.revokeObjectURL(currentWebpUrl)})</script>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Image Combiner</title>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        align-items: center;
+        background: #f0f2f5;
+        color: #1a1a2e;
+        display: flex;
+        flex-direction: column;
+        font-family: system-ui, sans-serif;
+        min-height: 100vh;
+        padding: 2rem 1rem;
+      }
+
+      h1 {
+        font-size: 2rem;
+        margin-bottom: 0.25rem;
+      }
+
+      .subtitle {
+        color: #555;
+        margin-bottom: 2rem;
+      }
+
+      .card {
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        max-width: 640px;
+        padding: 2rem;
+        width: 100%;
+      }
+
+      .drop-zone {
+        border: 2px dashed #a0a8b8;
+        border-radius: 8px;
+        cursor: pointer;
+        padding: 2rem;
+        text-align: center;
+        transition:
+          border-color 0.2s,
+          background 0.2s;
+      }
+
+      .drop-zone.dragover,
+      .drop-zone:hover {
+        background: #f0f6ff;
+        border-color: #4f8ef7;
+      }
+
+      .drop-zone svg {
+        color: #4f8ef7;
+        height: 48px;
+        margin-bottom: 0.75rem;
+        width: 48px;
+      }
+
+      .drop-zone p {
+        color: #555;
+      }
+
+      .drop-zone span {
+        color: #4f8ef7;
+        font-weight: 600;
+      }
+
+      #file-input {
+        display: none;
+      }
+
+      #preview-grid {
+        display: grid;
+        gap: 0.75rem;
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        margin-top: 1.25rem;
+      }
+
+      .thumb-wrap {
+        aspect-ratio: 1;
+        background: #eee;
+        border-radius: 6px;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .thumb-wrap img {
+        height: 100%;
+        object-fit: cover;
+        width: 100%;
+      }
+
+      .thumb-wrap button {
+        align-items: center;
+        background: rgba(0, 0, 0, 0.55);
+        border: none;
+        border-radius: 50%;
+        color: #fff;
+        cursor: pointer;
+        display: flex;
+        font-size: 0.75rem;
+        height: 22px;
+        justify-content: center;
+        line-height: 1;
+        position: absolute;
+        right: 4px;
+        top: 4px;
+        width: 22px;
+      }
+
+      .controls {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        margin-top: 1.25rem;
+      }
+
+      .layout-label {
+        font-size: 0.9rem;
+        font-weight: 600;
+      }
+
+      #layout {
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        font-size: 0.9rem;
+        padding: 0.4rem 0.75rem;
+      }
+
+      #combine-btn {
+        background: #4f8ef7;
+        border: none;
+        border-radius: 8px;
+        color: #fff;
+        cursor: pointer;
+        font-size: 1rem;
+        font-weight: 600;
+        margin-left: auto;
+        padding: 0.65rem 1.5rem;
+        transition: background 0.2s;
+      }
+
+      #combine-btn:hover {
+        background: #2f6fd6;
+      }
+
+      #combine-btn:disabled {
+        background: #aac4f7;
+        cursor: not-allowed;
+      }
+
+      #status {
+        color: #e05;
+        font-size: 0.9rem;
+        margin-top: 1rem;
+        min-height: 1.2em;
+      }
+
+      #top-progress {
+        height: 3px;
+        left: 0;
+        opacity: 0;
+        pointer-events: none;
+        position: fixed;
+        top: 0;
+        transition: opacity 0.25s;
+        width: 100%;
+        z-index: 1000;
+      }
+
+      #top-progress.active {
+        opacity: 1;
+      }
+
+      #top-progress-fill {
+        background: linear-gradient(90deg, #4f8ef7 0, #a78bfa 50%, #4f8ef7 100%);
+        background-size: 200% 100%;
+        border-radius: 0 2px 2px 0;
+        height: 100%;
+        transition: width 0.4s ease;
+        width: 0%;
+      }
+
+      #top-progress.active #top-progress-fill {
+        animation: progress-shimmer 1.8s linear infinite;
+      }
+
+      @keyframes progress-shimmer {
+        from {
+          background-position: 0 0;
+        }
+
+        to {
+          background-position: 200% 0;
+        }
+      }
+
+      #processing-state {
+        align-items: center;
+        background: #f4f7ff;
+        border: 1px solid #dce6ff;
+        border-radius: 8px;
+        color: #3a4a6b;
+        display: none;
+        font-size: 0.9rem;
+        gap: 0.75rem;
+        margin-top: 1rem;
+        padding: 0.75rem 1rem;
+      }
+
+      #processing-state.visible {
+        display: flex;
+      }
+
+      .spinner {
+        animation: spin 0.8s linear infinite;
+        border: 2.5px solid #c7d7f9;
+        border-radius: 50%;
+        border-top-color: #4f8ef7;
+        flex-shrink: 0;
+        height: 18px;
+        width: 18px;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .processing-label {
+        flex: 1;
+      }
+
+      .eta-badge {
+        background: #dce9ff;
+        border-radius: 999px;
+        color: #4f8ef7;
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        min-width: 3.5rem;
+        padding: 0.15rem 0.65rem;
+        text-align: center;
+        transition: background 0.3s;
+      }
+
+      .eta-badge.done {
+        background: #d4f7e6;
+        color: #2ecc71;
+      }
+
+      #result-section {
+        display: none;
+        margin-top: 2rem;
+        max-width: 640px;
+        width: 100%;
+      }
+
+      #result-section h2 {
+        margin-bottom: 0.75rem;
+      }
+
+      #result-img {
+        border-radius: 10px;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+        width: 100%;
+      }
+
+      .download-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-top: 1rem;
+      }
+
+      .dl-btn {
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        display: inline-flex;
+        flex-direction: column;
+        font-size: 0.9rem;
+        font-weight: 600;
+        gap: 0.2rem;
+        min-width: 140px;
+        padding: 0.65rem 1.3rem;
+        position: relative;
+        text-decoration: none;
+        transition: background 0.2s;
+      }
+
+      .dl-btn-title {
+        align-items: center;
+        display: flex;
+        font-size: 1rem;
+        gap: 0.35rem;
+      }
+
+      .dl-btn-meta {
+        font-size: 0.75rem;
+        font-weight: 400;
+        min-height: 1.1em;
+        opacity: 0.85;
+      }
+
+      .dl-btn-png {
+        background: #4f8ef7;
+        color: #fff;
+      }
+
+      .dl-btn-png:hover {
+        background: #2f6fd6;
+      }
+
+      .dl-btn-webp {
+        background: #2ecc71;
+        color: #fff;
+      }
+
+      .dl-btn-webp:hover {
+        background: #27ae60;
+      }
+
+      .savings-badge {
+        background: #e8318a;
+        border-radius: 999px;
+        color: #fff;
+        display: none;
+        font-size: 0.7rem;
+        font-weight: 700;
+        line-height: 1.4;
+        padding: 0.1rem 0.45rem;
+        position: absolute;
+        right: -9px;
+        top: -9px;
+        white-space: nowrap;
+      }
+
+      .savings-badge.visible {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="top-progress">
+      <div id="top-progress-fill"></div>
+    </div>
+
+    <h1>🖼️ Image Combiner</h1>
+    <p class="subtitle">Upload multiple images and merge them into one</p>
+
+    <div class="card">
+      <div id="drop-zone" class="drop-zone" role="button" tabindex="0" aria-label="Select images">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.5"
+            d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"
+          />
+        </svg>
+        <p><span>Click to select</span> or drag &amp; drop images here</p>
+        <p style="font-size: 0.8rem; margin-top: 0.5rem; color: #888">
+          PNG, JPG, WEBP — processed locally in your browser
+        </p>
+      </div>
+
+      <input id="file-input" type="file" accept="image/*" multiple />
+
+      <div id="preview-grid"></div>
+
+      <div class="controls">
+        <label class="layout-label" for="layout">Layout:</label>
+        <select id="layout">
+          <option value="horizontal">Horizontal (side by side)</option>
+          <option value="vertical">Vertical (stacked)</option>
+        </select>
+        <button id="combine-btn" disabled>Combine Images</button>
+      </div>
+
+      <div id="status" aria-live="polite"></div>
+
+      <div id="processing-state">
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="processing-label" class="processing-label">Processing images…</span>
+        <span id="eta-badge" class="eta-badge"></span>
+      </div>
+    </div>
+
+    <div id="result-section">
+      <h2>Combined Result</h2>
+      <img id="result-img" alt="Combined image" />
+      <br />
+      <div class="download-options">
+        <a id="download-btn" class="dl-btn dl-btn-png" download="combined.png">
+          <span class="dl-btn-title">⬇ PNG</span>
+          <span id="png-size" class="dl-btn-meta"></span>
+        </a>
+
+        <a id="download-webp-btn" class="dl-btn dl-btn-webp" download="combined.webp">
+          <span class="dl-btn-title"
+            >⬇ WebP
+            <span id="savings-badge" class="savings-badge"></span>
+          </span>
+          <span id="webp-size" class="dl-btn-meta">Optimizing…</span>
+        </a>
+      </div>
+    </div>
+
+    <script>
+      const MB_IN_BYTES = 1024 * 1024;
+      const KB_IN_BYTES = 1024;
+
+      const dropZone = document.getElementById("drop-zone");
+      const fileInput = document.getElementById("file-input");
+      const previewGrid = document.getElementById("preview-grid");
+      const layoutSelect = document.getElementById("layout");
+      const combineButton = document.getElementById("combine-btn");
+      const statusElement = document.getElementById("status");
+
+      const resultSection = document.getElementById("result-section");
+      const resultImage = document.getElementById("result-img");
+      const downloadButton = document.getElementById("download-btn");
+      const downloadWebpButton = document.getElementById("download-webp-btn");
+
+      const pngSizeElement = document.getElementById("png-size");
+      const webpSizeElement = document.getElementById("webp-size");
+      const savingsBadge = document.getElementById("savings-badge");
+
+      const topProgress = document.getElementById("top-progress");
+      const topProgressFill = document.getElementById("top-progress-fill");
+      const processingState = document.getElementById("processing-state");
+      const processingLabel = document.getElementById("processing-label");
+      const etaBadge = document.getElementById("eta-badge");
+
+      let files = [];
+      let currentResultUrl = null;
+      let currentWebpUrl = null;
+
+      let countdownInterval = null;
+      let progressAnimationFrameId = null;
+      let processStartTime = 0;
+
+      /**
+       * @param {number} sizeInBytes
+       * @returns {string}
+       */
+      function formatFileSize(sizeInBytes) {
+        if (sizeInBytes >= MB_IN_BYTES) {
+          return `${(sizeInBytes / MB_IN_BYTES).toFixed(1)} MB`;
+        }
+
+        return `${Math.round(sizeInBytes / KB_IN_BYTES)} KB`;
+      }
+
+      /**
+       * @param {File[]} selectedFiles
+       */
+      function addFiles(selectedFiles) {
+        selectedFiles
+          .filter((file) => file.type.startsWith("image/"))
+          .forEach((file) => {
+            files.push(file);
+            renderThumb(file, files.length - 1);
+          });
+
+        updateCombineButtonState();
+      }
+
+      /**
+       * @param {File} file
+       * @param {number} index
+       */
+      function renderThumb(file, index) {
+        const thumbnailUrl = URL.createObjectURL(file);
+
+        const thumbWrap = document.createElement("div");
+        thumbWrap.className = "thumb-wrap";
+        thumbWrap.dataset.index = String(index);
+        thumbWrap.dataset.url = thumbnailUrl;
+
+        const image = document.createElement("img");
+        image.src = thumbnailUrl;
+        image.alt = "preview";
+
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.title = "Remove";
+        removeButton.textContent = "✕";
+        removeButton.addEventListener("click", () => removeFile(thumbWrap));
+
+        thumbWrap.append(image, removeButton);
+        previewGrid.appendChild(thumbWrap);
+      }
+
+      /**
+       * @param {HTMLDivElement} thumbWrap
+       */
+      function removeFile(thumbWrap) {
+        const index = Number.parseInt(thumbWrap.dataset.index, 10);
+        files[index] = null;
+
+        if (thumbWrap.dataset.url) {
+          URL.revokeObjectURL(thumbWrap.dataset.url);
+        }
+
+        thumbWrap.remove();
+        updateCombineButtonState();
+      }
+
+      function updateCombineButtonState() {
+        const activeFileCount = files.filter(Boolean).length;
+        combineButton.disabled = activeFileCount < 2;
+        statusElement.textContent = "";
+      }
+
+      /**
+       * @param {File[]} imageFiles
+       * @returns {number}
+       */
+      function estimateSeconds(imageFiles) {
+        const totalMegabytes = imageFiles.reduce((sum, file) => sum + file.size, 0) / MB_IN_BYTES;
+        return Math.max(3, Math.min(20, Math.round(2 + 0.6 * imageFiles.length + 1.5 * totalMegabytes)));
+      }
+
+      function handleDropZoneClick() {
+        fileInput.click();
+      }
+
+      /**
+       * @param {KeyboardEvent} event
+       */
+      function handleDropZoneKeyDown(event) {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          fileInput.click();
+        }
+      }
+
+      /**
+       * @param {DragEvent} event
+       */
+      function handleDragOver(event) {
+        event.preventDefault();
+        dropZone.classList.add("dragover");
+      }
+
+      function handleDragLeave() {
+        dropZone.classList.remove("dragover");
+      }
+
+      /**
+       * @param {DragEvent} event
+       */
+      function handleDrop(event) {
+        event.preventDefault();
+        dropZone.classList.remove("dragover");
+        addFiles([...event.dataTransfer.files]);
+      }
+
+      function handleFileInputChange() {
+        addFiles([...fileInput.files]);
+        fileInput.value = "";
+      }
+
+      dropZone.addEventListener("click", handleDropZoneClick);
+      dropZone.addEventListener("keydown", handleDropZoneKeyDown);
+      dropZone.addEventListener("dragover", handleDragOver);
+      dropZone.addEventListener("dragleave", handleDragLeave);
+      dropZone.addEventListener("drop", handleDrop);
+      fileInput.addEventListener("change", handleFileInputChange);
+
+      /**
+       * @param {number} estimatedSeconds
+       * @param {number} fileCount
+       */
+      function startProcessingUI(estimatedSeconds, fileCount) {
+        topProgressFill.style.transition = "none";
+        topProgressFill.style.width = "0%";
+        topProgressFill.offsetWidth;
+        topProgressFill.style.transition = "width .4s ease";
+
+        topProgress.classList.add("active");
+        topProgressFill.style.width = "5%";
+
+        processingLabel.textContent = `Processing ${fileCount} image${fileCount !== 1 ? "s" : ""}…`;
+        etaBadge.textContent = `~${estimatedSeconds}s`;
+        etaBadge.classList.remove("done");
+        processingState.classList.add("visible");
+
+        let remainingSeconds = estimatedSeconds;
+        countdownInterval = window.setInterval(() => {
+          remainingSeconds -= 1;
+
+          if (remainingSeconds <= 0) {
+            etaBadge.textContent = "almost…";
+            clearInterval(countdownInterval);
+            countdownInterval = null;
+            return;
+          }
+
+          etaBadge.textContent = `~${remainingSeconds}s`;
+        }, 1000);
+
+        processStartTime = performance.now();
+        const totalDurationMs = estimatedSeconds * 1000;
+
+        const animateProgress = (time) => {
+          const ratio = Math.min((time - processStartTime) / totalDurationMs, 1);
+          const easedRatio = 1 - Math.pow(1 - ratio, 2);
+          topProgressFill.style.width = `${5 + 80 * easedRatio}%`;
+
+          if (ratio < 1) {
+            progressAnimationFrameId = window.requestAnimationFrame(animateProgress);
+          }
+        };
+
+        progressAnimationFrameId = window.requestAnimationFrame(animateProgress);
+      }
+
+      function stopProcessingUI() {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+
+        window.cancelAnimationFrame(progressAnimationFrameId);
+        progressAnimationFrameId = null;
+
+        topProgressFill.style.width = "100%";
+
+        window.setTimeout(() => {
+          topProgress.classList.remove("active");
+
+          window.setTimeout(() => {
+            topProgressFill.style.width = "0%";
+          }, 300);
+        }, 400);
+
+        processingState.classList.remove("visible");
+      }
+
+      /**
+       * @param {boolean} enabled
+       */
+      function setWebpButtonEnabled(enabled) {
+        if (enabled) {
+          downloadWebpButton.removeAttribute("aria-disabled");
+          downloadWebpButton.removeAttribute("role");
+          return;
+        }
+
+        downloadWebpButton.removeAttribute("href");
+        downloadWebpButton.setAttribute("aria-disabled", "true");
+        downloadWebpButton.setAttribute("role", "button");
+      }
+
+      /**
+       * @param {File[]} imageFiles
+       * @param {"horizontal" | "vertical"} layout
+       * @returns {Promise<{pngBlob: Blob, webpBlob: Blob | null}>}
+       */
+      function combineImages(imageFiles, layout) {
+        if (imageFiles.length === 0) {
+          return Promise.reject(new Error("No images to combine."));
+        }
+
+        return new Promise((resolve, reject) => {
+          const workerCode = `
+            self.onmessage = async ({ data: { files, layout } }) => {
+              try {
+                const bitmaps = await Promise.all(files.map((file) => createImageBitmap(file)));
+
+                let canvasWidth;
+                let canvasHeight;
+
+                if (layout === "vertical") {
+                  canvasWidth = Math.max(...bitmaps.map((bitmap) => bitmap.width));
+                  canvasHeight = bitmaps.reduce((sum, bitmap) => sum + bitmap.height, 0);
+                } else {
+                  canvasWidth = bitmaps.reduce((sum, bitmap) => sum + bitmap.width, 0);
+                  canvasHeight = Math.max(...bitmaps.map((bitmap) => bitmap.height));
+                }
+
+                const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
+                const context = canvas.getContext("2d");
+
+                context.fillStyle = "#ffffff";
+                context.fillRect(0, 0, canvasWidth, canvasHeight);
+
+                let x = 0;
+                let y = 0;
+                for (const bitmap of bitmaps) {
+                  context.drawImage(bitmap, x, y);
+                  if (layout === "vertical") {
+                    y += bitmap.height;
+                  } else {
+                    x += bitmap.width;
+                  }
+                  bitmap.close();
+                }
+
+                let pngBlob;
+                let webpBlob;
+
+                try {
+                  [pngBlob, webpBlob] = await Promise.all([
+                    canvas.convertToBlob({ type: "image/png" }),
+                    canvas.convertToBlob({ type: "image/webp", quality: 0.92 }),
+                  ]);
+                } catch {
+                  pngBlob = await canvas.convertToBlob({ type: "image/png" });
+                  webpBlob = null;
+                }
+
+                self.postMessage({ blob: pngBlob, webpBlob });
+              } catch (error) {
+                self.postMessage({ error: error.message });
+              }
+            };
+          `;
+
+          const workerUrl = URL.createObjectURL(
+            new Blob([workerCode], { type: "application/javascript" }),
+          );
+
+          const worker = new Worker(workerUrl);
+
+          worker.onmessage = ({ data }) => {
+            URL.revokeObjectURL(workerUrl);
+            worker.terminate();
+
+            if (data.error) {
+              reject(new Error(data.error));
+              return;
+            }
+
+            resolve({ pngBlob: data.blob, webpBlob: data.webpBlob });
+          };
+
+          worker.onerror = (event) => {
+            URL.revokeObjectURL(workerUrl);
+            worker.terminate();
+            reject(new Error(event.message || "Worker failed to process images."));
+          };
+
+          worker.postMessage({ files: imageFiles, layout });
+        });
+      }
+
+      async function handleCombineClick() {
+        const activeFiles = files.filter(Boolean);
+        if (activeFiles.length < 2) {
+          return;
+        }
+
+        combineButton.disabled = true;
+        statusElement.textContent = "";
+        resultSection.style.display = "none";
+
+        startProcessingUI(estimateSeconds(activeFiles), activeFiles.length);
+
+        try {
+          const { pngBlob, webpBlob } = await combineImages(activeFiles, layoutSelect.value);
+
+          if (currentResultUrl) {
+            URL.revokeObjectURL(currentResultUrl);
+          }
+
+          if (currentWebpUrl) {
+            URL.revokeObjectURL(currentWebpUrl);
+          }
+
+          currentResultUrl = URL.createObjectURL(pngBlob);
+          resultImage.src = currentResultUrl;
+          downloadButton.href = currentResultUrl;
+          pngSizeElement.textContent = formatFileSize(pngBlob.size);
+
+          savingsBadge.classList.remove("visible");
+          webpSizeElement.textContent = "Optimizing…";
+
+          if (webpBlob) {
+            currentWebpUrl = URL.createObjectURL(webpBlob);
+            downloadWebpButton.href = currentWebpUrl;
+            setWebpButtonEnabled(true);
+
+            webpSizeElement.textContent = formatFileSize(webpBlob.size);
+
+            const savingsPercentage = pngBlob.size > 0
+              ? Math.round((1 - webpBlob.size / pngBlob.size) * 100)
+              : 0;
+
+            if (savingsPercentage > 0) {
+              savingsBadge.textContent = `-${savingsPercentage}%`;
+              savingsBadge.classList.add("visible");
+            }
+          } else {
+            currentWebpUrl = null;
+            webpSizeElement.textContent = "Unavailable";
+            setWebpButtonEnabled(false);
+          }
+
+          resultSection.style.display = "block";
+          resultSection.scrollIntoView({ behavior: "smooth" });
+        } catch (error) {
+          statusElement.textContent = `Error: ${error.message}`;
+        } finally {
+          stopProcessingUI();
+          combineButton.disabled = false;
+          updateCombineButtonState();
+        }
+      }
+
+      combineButton.addEventListener("click", handleCombineClick);
+
+      function cleanupObjectUrls() {
+        const thumbnailCards = document.querySelectorAll(".thumb-wrap[data-url]");
+        thumbnailCards.forEach((element) => URL.revokeObjectURL(element.dataset.url));
+
+        if (currentResultUrl) {
+          URL.revokeObjectURL(currentResultUrl);
+        }
+
+        if (currentWebpUrl) {
+          URL.revokeObjectURL(currentWebpUrl);
+        }
+      }
+
+      window.addEventListener("pagehide", cleanupObjectUrls);
+    </script>
+  </body>
+</html>
