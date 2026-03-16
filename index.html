@@ -522,6 +522,9 @@
       let currentWebpUrl = null;
       let currentMinUrl = null;
 
+      let activeWorker = null;
+      let activeWorkerUrl = null;
+
       let countdownInterval = null;
       let progressAnimationFrameId = null;
       let processStartTime = 0;
@@ -555,6 +558,9 @@
         const total = validFiles.length;
         let processed = 0;
         showPreprocessUI(total);
+        // Yield to the browser so it can paint the initial preprocessing state
+        // before the queue loop starts consuming the JS thread.
+        await new Promise((resolve) => setTimeout(resolve, 0));
 
         // Concurrency-limited parallel queue: up to 8 files at once.
         const CONCURRENCY = 8;
@@ -852,9 +858,10 @@
       /**
        * @param {File[]} imageFiles
        * @param {"horizontal" | "vertical"} layout
+       * @param {(done: number, total: number) => void} [onProgress]
        * @returns {Promise<{pngBlob: Blob, webpBlob: Blob | null, minBlob: Blob | null, minType: string | null}>}
        */
-      function combineImages(imageFiles, layout) {
+      function combineImages(imageFiles, layout, onProgress) {
         if (imageFiles.length === 0) {
           return Promise.reject(new Error("No images to combine."));
         }
@@ -863,7 +870,17 @@
           const workerCode = `
             self.onmessage = async ({ data: { files, layout } }) => {
               try {
-                const bitmaps = await Promise.all(files.map((file) => createImageBitmap(file)));
+                // Decode images in batches to avoid hitting browser memory /
+                // concurrency limits when many large images are uploaded.
+                const BITMAP_BATCH = 8;
+                const bitmaps = [];
+                for (let i = 0; i < files.length; i += BITMAP_BATCH) {
+                  const batch = await Promise.all(
+                    files.slice(i, i + BITMAP_BATCH).map((f) => createImageBitmap(f)),
+                  );
+                  bitmaps.push(...batch);
+                  self.postMessage({ progress: bitmaps.length, total: files.length });
+                }
 
                 let canvasWidth;
                 let canvasHeight;
@@ -938,9 +955,18 @@
           );
 
           const worker = new Worker(workerUrl);
+          activeWorkerUrl = workerUrl;
+          activeWorker = worker;
 
           worker.onmessage = ({ data }) => {
+            if (data.progress !== undefined) {
+              onProgress?.(data.progress, data.total);
+              return;
+            }
+
             URL.revokeObjectURL(workerUrl);
+            activeWorkerUrl = null;
+            activeWorker = null;
             worker.terminate();
 
             if (data.error) {
@@ -953,6 +979,8 @@
 
           worker.onerror = (event) => {
             URL.revokeObjectURL(workerUrl);
+            activeWorkerUrl = null;
+            activeWorker = null;
             worker.terminate();
             reject(new Error(event.message || "Worker failed to process images."));
           };
@@ -974,7 +1002,19 @@
         startProcessingUI(estimateSeconds(activeFiles), activeFiles.length);
 
         try {
-          const { pngBlob, webpBlob, minBlob, minType } = await combineImages(activeFiles, layoutSelect.value);
+          const { pngBlob, webpBlob, minBlob, minType } = await combineImages(
+            activeFiles,
+            layoutSelect.value,
+            (done, total) => {
+              // Switch from time-based animation to real progress once data arrives.
+              if (progressAnimationFrameId) {
+                window.cancelAnimationFrame(progressAnimationFrameId);
+                progressAnimationFrameId = null;
+              }
+              processingLabel.textContent = `Processing ${done} / ${pluralImages(total)}…`;
+              topProgressFill.style.width = `${5 + 80 * (done / total)}%`;
+            },
+          );
 
           if (currentResultUrl) {
             URL.revokeObjectURL(currentResultUrl);
@@ -1057,6 +1097,16 @@
       combineButton.addEventListener("click", handleCombineClick);
 
       function cleanupObjectUrls() {
+        if (activeWorker) {
+          activeWorker.terminate();
+          activeWorker = null;
+        }
+
+        if (activeWorkerUrl) {
+          URL.revokeObjectURL(activeWorkerUrl);
+          activeWorkerUrl = null;
+        }
+
         const thumbnailCards = document.querySelectorAll(".thumb-wrap[data-url]");
         thumbnailCards.forEach((element) => URL.revokeObjectURL(element.dataset.url));
 
