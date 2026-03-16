@@ -446,7 +446,7 @@
       </div>
 
       <div id="status" aria-live="polite"></div>
-      <div id="selection-summary" role="status" aria-live="polite"></div>
+      <div id="selection-summary" role="status"></div>
 
       <div id="preprocess-state" role="status" aria-live="polite">
         <span class="spinner" aria-hidden="true"></span>
@@ -566,9 +566,9 @@
         if (validFiles.length === 0) return;
 
         const total = validFiles.length;
-        const totalIncludingNew = files.filter(Boolean).length + total;
+        const combinedFileCount = files.filter(Boolean).length + total;
         const estimatedPreprocessSeconds = estimatePreprocessSeconds(validFiles);
-        selectionSummary.textContent = `Selected ${pluralImages(totalIncludingNew)} — preprocessing ~${estimatedPreprocessSeconds}s`;
+        selectionSummary.textContent = `Selected ${pluralImages(combinedFileCount)} — preprocessing about ${estimatedPreprocessSeconds}s`;
         let processed = 0;
         showPreprocessUI(total, estimatedPreprocessSeconds);
         // Yield to the browser so it can paint the initial preprocessing state
@@ -737,7 +737,7 @@
        */
       function showPreprocessUI(total, estimatedSeconds) {
         preprocessEstimatedSeconds = estimatedSeconds;
-        preprocessLabel.textContent = `Preprocessing 0 / ${pluralImages(total)} (~${estimatedSeconds}s)…`;
+        preprocessLabel.textContent = `Preprocessing 0 / ${pluralImages(total)} (about ${estimatedSeconds}s)…`;
         preprocessProgressFill.style.width = "0%";
         preprocessState.classList.add("visible");
       }
@@ -747,6 +747,10 @@
        * @param {number} total
        */
       function updatePreprocessUI(done, total) {
+        if (total === 0) {
+          return;
+        }
+
         const remainingSeconds = Math.max(0, Math.ceil(((total - done) / total) * preprocessEstimatedSeconds));
         const suffix = remainingSeconds > 0 ? ` (~${remainingSeconds}s left)` : "";
         preprocessLabel.textContent = `Preprocessing ${done} / ${pluralImages(total)}${suffix}…`;
@@ -994,15 +998,22 @@
                 };
 
                 pngBlob = await canvas.convertToBlob({ type: "image/png" });
-                webpBlob = await encodeBlob(canvas, "image/webp", 0.86);
+                // Keep good visual quality while reducing "compressed" result size.
+                const WEBP_PREVIEW_QUALITY = 0.86;
+                webpBlob = await encodeBlob(canvas, "image/webp", WEBP_PREVIEW_QUALITY);
 
                 // Generate minimal blob from more aggressive lossy candidates.
                 const minCandidates = [];
+                // ~20MP raw RGBA is about 80MB, which is where browser memory pressure rises.
                 const HUGE_CANVAS_PIXEL_THRESHOLD = 20_000_000;
                 // Very large canvases are memory heavy in browsers, so also try
                 // downscaled candidates when the output exceeds ~20 MP.
                 const isHugeOutput = canvasWidth * canvasHeight > HUGE_CANVAS_PIXEL_THRESHOLD;
-                const scaleCandidates = isHugeOutput ? [1, 0.9, 0.8] : [1, 0.9];
+                const STANDARD_SCALES = [1, 0.9];
+                const HUGE_CANVAS_SCALES = [1, 0.9, 0.8];
+                const scaleCandidates = isHugeOutput ? HUGE_CANVAS_SCALES : STANDARD_SCALES;
+                // Quality ladders are stepped from visually acceptable down to
+                // aggressive compression, then we pick the smallest output.
                 const lossyTargets = [
                   { type: "image/jpeg", qualities: [0.72, 0.62, 0.52], ext: "jpg" },
                   { type: "image/webp", qualities: [0.68, 0.56, 0.46], ext: "webp" },
