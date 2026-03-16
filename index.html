@@ -922,31 +922,31 @@
         return new Promise((resolve, reject) => {
           const workerCode = `
             self.onmessage = async ({ data: { files, layout } }) => {
-              let bitmaps = [];
               let canvas = null;
               let context = null;
               try {
-                // Decode images in batches to avoid hitting browser memory /
-                // concurrency limits when many large images are uploaded.
-                const BITMAP_BATCH = 8;
-                bitmaps = [];
-                for (let i = 0; i < files.length; i += BITMAP_BATCH) {
-                  const batch = await Promise.all(
-                    files.slice(i, i + BITMAP_BATCH).map((f) => createImageBitmap(f)),
-                  );
-                  bitmaps.push(...batch);
-                  self.postMessage({ progress: bitmaps.length, total: files.length });
+                // Two-pass streaming: we never hold more than one decoded bitmap
+                // in memory at a time, so peak RAM is (canvas + 1 bitmap) rather
+                // than (canvas + all bitmaps at once).
+
+                // Pass 1 — measure every image one at a time.
+                // Decode → record dimensions → close immediately.
+                const dimensions = [];
+                for (let i = 0; i < files.length; i++) {
+                  const bitmap = await createImageBitmap(files[i]);
+                  dimensions.push({ width: bitmap.width, height: bitmap.height });
+                  bitmap.close();
                 }
 
                 let canvasWidth;
                 let canvasHeight;
 
                 if (layout === "vertical") {
-                  canvasWidth = Math.max(...bitmaps.map((bitmap) => bitmap.width));
-                  canvasHeight = bitmaps.reduce((sum, bitmap) => sum + bitmap.height, 0);
+                  canvasWidth = Math.max(...dimensions.map((d) => d.width));
+                  canvasHeight = dimensions.reduce((sum, d) => sum + d.height, 0);
                 } else {
-                  canvasWidth = bitmaps.reduce((sum, bitmap) => sum + bitmap.width, 0);
-                  canvasHeight = Math.max(...bitmaps.map((bitmap) => bitmap.height));
+                  canvasWidth = dimensions.reduce((sum, d) => sum + d.width, 0);
+                  canvasHeight = Math.max(...dimensions.map((d) => d.height));
                 }
 
                 canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
@@ -955,16 +955,20 @@
                 context.fillStyle = "#ffffff";
                 context.fillRect(0, 0, canvasWidth, canvasHeight);
 
+                // Pass 2 — draw every image one at a time.
+                // Decode → draw → close immediately before loading the next one.
                 let x = 0;
                 let y = 0;
-                for (const bitmap of bitmaps) {
+                for (let i = 0; i < files.length; i++) {
+                  const bitmap = await createImageBitmap(files[i]);
                   context.drawImage(bitmap, x, y);
-                  if (layout === "vertical") {
-                    y += bitmap.height;
-                  } else {
-                    x += bitmap.width;
-                  }
                   bitmap.close();
+                  if (layout === "vertical") {
+                    y += dimensions[i].height;
+                  } else {
+                    x += dimensions[i].width;
+                  }
+                  self.postMessage({ progress: i + 1, total: files.length });
                 }
 
                 let pngBlob;
@@ -1040,11 +1044,6 @@
               } catch (error) {
                 self.postMessage({ error: error.message });
               } finally {
-                // Ensure image decoder resources are released even on early failures.
-                for (const bitmap of bitmaps) {
-                  try { bitmap.close(); } catch { /* no-op */ }
-                }
-
                 if (canvas) {
                   // Shrink the canvas backing store to release raster/GPU memory.
                   canvas.width = 1;

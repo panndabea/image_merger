@@ -101,6 +101,21 @@ This means:
 - **Privacy** — images never leave the user's device.
 - **Zero latency** — no upload/download round-trip.
 
+### Two-pass streaming — how we keep RAM low
+
+Imagine you have 10 big LEGO bricks to glue into one row. You have two choices:
+
+**Old way (lots of space):** Take all 10 bricks out of the box at the same time, lay them side by side on the floor, *then* measure how long the row will be, *then* glue them together. While you are measuring, all 10 bricks are taking up floor space at once.
+
+**New way (tiny footprint):** First, go through the box one brick at a time, write down each brick's size, then put it straight back. Now you know the total size, so you cut the exact right length of base plate. Then go through the box again, take one brick out, glue it on, put it back before picking up the next. At any moment only **one brick is ever out of the box**.
+
+That is exactly what the combiner now does, in two passes:
+
+1. **Measure pass** — for every image file, decode it into a bitmap just long enough to read its `width` and `height`, then immediately call `bitmap.close()` to free that memory before touching the next file.
+2. **Draw pass** — now that the exact canvas size is known, create the output canvas, then loop through the files again: decode one bitmap, paint it at the right position, `bitmap.close()` right away, move to the next.
+
+Because no decoded image is ever held longer than a single iteration, peak RAM is roughly **canvas pixels × 4 bytes + one image's pixels × 4 bytes** instead of **canvas + every image simultaneously**. For ten 4K photos that is the difference between needing ~1 GB and needing only ~200 MB.
+
 ### Blob URL lifecycle management
 
 Each time the user combines a new set of images, the previous blob URL is revoked with `URL.revokeObjectURL()` before a new one is created.  Without this, every combine operation would permanently allocate memory that is never freed until the tab closes.
