@@ -590,6 +590,7 @@
       function startProcessingUI(estimatedSeconds, fileCount) {
         topProgressFill.style.transition = "none";
         topProgressFill.style.width = "0%";
+        // Force reflow so the transition restart is applied reliably.
         topProgressFill.offsetWidth;
         topProgressFill.style.transition = "width .4s ease";
 
