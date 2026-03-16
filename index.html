@@ -163,10 +163,14 @@
       }
 
       #status {
-        color: #e05;
+        color: #555;
         font-size: 0.9rem;
         margin-top: 1rem;
         min-height: 1.2em;
+      }
+
+      #status.error {
+        color: #e05;
       }
 
       #top-progress {
@@ -261,6 +265,39 @@
       .eta-badge.done {
         background: #d4f7e6;
         color: #2ecc71;
+      }
+
+      #preprocess-state {
+        align-items: center;
+        background: #f4f7ff;
+        border: 1px solid #dce6ff;
+        border-radius: 8px;
+        color: #3a4a6b;
+        display: none;
+        font-size: 0.9rem;
+        gap: 0.75rem;
+        margin-top: 1rem;
+        padding: 0.75rem 1rem;
+      }
+
+      #preprocess-state.visible {
+        display: flex;
+      }
+
+      #preprocess-progress {
+        background: #dce6ff;
+        border-radius: 999px;
+        flex: 1;
+        height: 6px;
+        overflow: hidden;
+      }
+
+      #preprocess-progress-fill {
+        background: linear-gradient(90deg, #4f8ef7, #a78bfa);
+        border-radius: 999px;
+        height: 100%;
+        transition: width 0.25s ease;
+        width: 0%;
       }
 
       #result-section {
@@ -403,6 +440,14 @@
 
       <div id="status" aria-live="polite"></div>
 
+      <div id="preprocess-state" role="status" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="preprocess-label" class="processing-label">Preprocessing images…</span>
+        <div id="preprocess-progress" aria-hidden="true">
+          <div id="preprocess-progress-fill"></div>
+        </div>
+      </div>
+
       <div id="processing-state">
         <span class="spinner" aria-hidden="true"></span>
         <span id="processing-label" class="processing-label">Processing images…</span>
@@ -468,6 +513,10 @@
       const processingLabel = document.getElementById("processing-label");
       const etaBadge = document.getElementById("eta-badge");
 
+      const preprocessState = document.getElementById("preprocess-state");
+      const preprocessLabel = document.getElementById("preprocess-label");
+      const preprocessProgressFill = document.getElementById("preprocess-progress-fill");
+
       let files = [];
       let currentResultUrl = null;
       let currentWebpUrl = null;
@@ -493,43 +542,82 @@
        * @param {File[]} selectedFiles
        */
       async function addFiles(selectedFiles) {
-        for (const file of selectedFiles) {
+        const validFiles = [...selectedFiles].filter((f) => {
+          const isHeic =
+            f.type === "image/heic" ||
+            f.type === "image/heif" ||
+            /\.(heic|heif)$/i.test(f.name);
+          return isHeic || f.type.startsWith("image/");
+        });
+
+        if (validFiles.length === 0) return;
+
+        const total = validFiles.length;
+        let processed = 0;
+        showPreprocessUI(total);
+
+        // Concurrency-limited parallel queue: up to 8 files at once.
+        const CONCURRENCY = 8;
+        const queue = [...validFiles];
+        const resultFiles = [];
+
+        const processOne = async (file) => {
           const isHeic =
             file.type === "image/heic" ||
             file.type === "image/heif" ||
             /\.(heic|heif)$/i.test(file.name);
 
           if (isHeic) {
-            statusElement.textContent = `Converting ${file.name}…`;
             try {
               const result = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.92 });
-              // heic2any returns an array for multi-image HEIC files; normalise to array.
               const blobs = Array.isArray(result) ? result : [result];
               blobs.forEach((convertedBlob, blobIndex) => {
                 const suffix = blobs.length > 1 ? `-${blobIndex + 1}` : "";
-                const convertedFile = new File(
-                  [convertedBlob],
-                  file.name.replace(/\.(heic|heif)$/i, `${suffix}.jpg`),
-                  { type: "image/jpeg" },
+                resultFiles.push(
+                  new File(
+                    [convertedBlob],
+                    file.name.replace(/\.(heic|heif)$/i, `${suffix}.jpg`),
+                    { type: "image/jpeg" },
+                  ),
                 );
-                files.push(convertedFile);
-                renderThumb(convertedFile, files.length - 1);
               });
-            } catch (conversionError) {
+            } catch {
               statusElement.textContent = `Could not convert HEIC file: ${file.name}`;
+              statusElement.classList.add("error");
             }
-          } else if (file.type.startsWith("image/")) {
-            files.push(file);
-            renderThumb(file, files.length - 1);
+          } else {
+            resultFiles.push(file);
           }
-        }
 
+          processed += 1;
+          updatePreprocessUI(processed, total);
+        };
+
+        // Launch parallel workers that drain the shared queue.
+        await Promise.all(
+          Array.from({ length: Math.min(CONCURRENCY, total) }, async () => {
+            while (queue.length > 0) {
+              await processOne(queue.shift());
+            }
+          }),
+        );
+
+        // Batch all thumbnail DOM insertions in one operation to minimise reflows.
+        const fragment = document.createDocumentFragment();
+        for (const file of resultFiles) {
+          files.push(file);
+          fragment.appendChild(renderThumb(file, files.length - 1));
+        }
+        previewGrid.appendChild(fragment);
+
+        hidePreprocessUI();
         updateCombineButtonState();
       }
 
       /**
        * @param {File} file
        * @param {number} index
+       * @returns {HTMLDivElement}
        */
       function renderThumb(file, index) {
         const thumbnailUrl = URL.createObjectURL(file);
@@ -542,6 +630,7 @@
         const image = document.createElement("img");
         image.src = thumbnailUrl;
         image.alt = "preview";
+        image.loading = "lazy";
 
         const removeButton = document.createElement("button");
         removeButton.type = "button";
@@ -550,7 +639,7 @@
         removeButton.addEventListener("click", () => removeFile(thumbWrap));
 
         thumbWrap.append(image, removeButton);
-        previewGrid.appendChild(thumbWrap);
+        return thumbWrap;
       }
 
       /**
@@ -572,6 +661,7 @@
         const activeFileCount = files.filter(Boolean).length;
         combineButton.disabled = activeFileCount < 2;
         statusElement.textContent = "";
+        statusElement.classList.remove("error");
       }
 
       /**
@@ -581,6 +671,36 @@
       function estimateSeconds(imageFiles) {
         const totalMegabytes = imageFiles.reduce((sum, file) => sum + file.size, 0) / MB_IN_BYTES;
         return Math.max(3, Math.min(20, Math.round(2 + 0.6 * imageFiles.length + 1.5 * totalMegabytes)));
+      }
+
+      /**
+       * @param {number} count
+       * @returns {string}
+       */
+      function pluralImages(count) {
+        return `${count} image${count !== 1 ? "s" : ""}`;
+      }
+
+      /**
+       * @param {number} total
+       */
+      function showPreprocessUI(total) {
+        preprocessLabel.textContent = `Preprocessing 0 / ${pluralImages(total)}…`;
+        preprocessProgressFill.style.width = "0%";
+        preprocessState.classList.add("visible");
+      }
+
+      /**
+       * @param {number} done
+       * @param {number} total
+       */
+      function updatePreprocessUI(done, total) {
+        preprocessLabel.textContent = `Preprocessing ${done} / ${pluralImages(total)}…`;
+        preprocessProgressFill.style.width = `${Math.round((done / total) * 100)}%`;
+      }
+
+      function hidePreprocessUI() {
+        preprocessState.classList.remove("visible");
       }
 
       function handleDropZoneClick() {
@@ -644,7 +764,7 @@
         topProgress.classList.add("active");
         topProgressFill.style.width = "5%";
 
-        processingLabel.textContent = `Processing ${fileCount} image${fileCount !== 1 ? "s" : ""}…`;
+        processingLabel.textContent = `Processing ${pluralImages(fileCount)}…`;
         etaBadge.textContent = `~${estimatedSeconds}s`;
         etaBadge.classList.remove("done");
         processingState.classList.add("visible");
@@ -926,6 +1046,7 @@
           resultSection.scrollIntoView({ behavior: "smooth" });
         } catch (error) {
           statusElement.textContent = `Error: ${error.message}`;
+          statusElement.classList.add("error");
         } finally {
           stopProcessingUI();
           combineButton.disabled = false;
