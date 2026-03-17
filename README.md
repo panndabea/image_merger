@@ -116,6 +116,30 @@ That is exactly what the combiner now does, in two passes:
 
 Because no decoded image is ever held longer than a single iteration, peak RAM is roughly **canvas pixels × 4 bytes + one image's pixels × 4 bytes** instead of **canvas + every image simultaneously**. For ten 4K photos that is the difference between needing ~1 GB and needing only ~200 MB.
 
+### C-inspired memory and speed techniques
+
+Several patterns borrowed from low-level C programming are applied throughout the worker:
+
+#### Packed typed-array dimensions (avoid heap-object churn)
+
+Instead of allocating an array of `{width, height}` JavaScript objects in the measure pass, image dimensions are stored in a flat `Int32Array` — a contiguous block of raw integers exactly like a C `int[]`.  This eliminates the per-element object header overhead and keeps the data cache-friendly.
+
+#### `willReadFrequently: false` — halve canvas backing-store RAM
+
+Every `OffscreenCanvas.getContext("2d")` call now passes `{ willReadFrequently: false }`.  This signals to the browser that pixels will **never** be read back by JavaScript (only forwarded to `convertToBlob` for encoding), so the implementation is free to keep the raster exclusively in GPU memory rather than maintaining a second CPU-accessible shadow copy.  For a 4 K × 4 K output canvas that saves ~64 MB of RAM.
+
+#### C memory-pool pattern — one canvas per resolution level
+
+When generating "Smallest" download candidates at reduced resolutions (0.9 ×, 0.8 ×), the previous code created a **new** `OffscreenCanvas` for every format × quality combination — up to six identical-sized canvases alive at the same time.  The new code allocates a **single pooled canvas per scale level**, encodes all format and quality variants from it, then explicitly frees it (`pool.width = 1; pool.height = 1; pool = null`) before moving to the next scale.  Peak allocation is now `output canvas + 1 pool canvas` instead of `output canvas + N pool canvases`.
+
+#### Parallel encoding via `Promise.all`
+
+PNG and WebP are encoded **concurrently** instead of sequentially using `Promise.all([canvas.convertToBlob(…), canvas.convertToBlob(…)])`.  Likewise, all format × quality variants within each scale group are dispatched to the browser's codec pipeline in parallel.  Both encodings read from the same immutable pixel buffer so there is no data hazard — this is equivalent to issuing multiple concurrent `read(2)` calls on a file descriptor in C.  On a modern multi-core device this alone can halve the total encoding time.
+
+#### Explicit resource release (C-style `free`)
+
+Every temporary `OffscreenCanvas` is zeroed (`width = 1, height = 1`) the moment it is no longer needed, releasing the GPU raster memory immediately rather than waiting for the garbage collector.  The same principle applies to `ImageBitmap.close()` after each draw call in the streaming passes.
+
 ### Blob URL lifecycle management
 
 Each time the user combines a new set of images, the previous blob URL is revoked with `URL.revokeObjectURL()` before a new one is created.  Without this, every combine operation would permanently allocate memory that is never freed until the tab closes.

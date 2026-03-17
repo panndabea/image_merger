@@ -935,10 +935,13 @@
 
                 // Pass 1 — measure every image one at a time.
                 // Decode → record dimensions → close immediately.
-                const dimensions = [];
+                // Dimensions are stored as a flat Int32Array (C-style packed array)
+                // rather than an array of objects, avoiding per-element heap allocation.
+                const dimBuf = new Int32Array(files.length * 2);
                 for (let i = 0; i < files.length; i++) {
                   const bitmap = await createImageBitmap(files[i]);
-                  dimensions.push({ width: bitmap.width, height: bitmap.height });
+                  dimBuf[i * 2]     = bitmap.width;
+                  dimBuf[i * 2 + 1] = bitmap.height;
                   bitmap.close();
                 }
 
@@ -946,15 +949,27 @@
                 let canvasHeight;
 
                 if (layout === "vertical") {
-                  canvasWidth = Math.max(...dimensions.map((d) => d.width));
-                  canvasHeight = dimensions.reduce((sum, d) => sum + d.height, 0);
+                  canvasWidth = 0;
+                  canvasHeight = 0;
+                  for (let i = 0; i < files.length; i++) {
+                    if (dimBuf[i * 2] > canvasWidth) canvasWidth = dimBuf[i * 2];
+                    canvasHeight += dimBuf[i * 2 + 1];
+                  }
                 } else {
-                  canvasWidth = dimensions.reduce((sum, d) => sum + d.width, 0);
-                  canvasHeight = Math.max(...dimensions.map((d) => d.height));
+                  canvasWidth = 0;
+                  canvasHeight = 0;
+                  for (let i = 0; i < files.length; i++) {
+                    canvasWidth += dimBuf[i * 2];
+                    if (dimBuf[i * 2 + 1] > canvasHeight) canvasHeight = dimBuf[i * 2 + 1];
+                  }
                 }
 
+                // willReadFrequently: false tells the browser it never needs to keep
+                // a CPU-readable shadow copy of the canvas pixels — the raster lives
+                // only in GPU memory until convertToBlob pulls it out, which halves
+                // the RGBA backing store RAM compared to a default context.
                 canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
-                context = canvas.getContext("2d");
+                context = canvas.getContext("2d", { willReadFrequently: false });
 
                 context.fillStyle = "#ffffff";
                 context.fillRect(0, 0, canvasWidth, canvasHeight);
@@ -968,58 +983,30 @@
                   context.drawImage(bitmap, x, y);
                   bitmap.close();
                   if (layout === "vertical") {
-                    y += dimensions[i].height;
+                    y += dimBuf[i * 2 + 1];
                   } else {
-                    x += dimensions[i].width;
+                    x += dimBuf[i * 2];
                   }
                   self.postMessage({ progress: i + 1, total: files.length });
                 }
 
-                let pngBlob;
-                let webpBlob;
-                let minBlob = null;
-                let minType = null;
-
-                const encodeBlob = async (targetCanvas, type, quality) => {
-                  try {
-                    const blob = await targetCanvas.convertToBlob({ type, quality });
-                    return blob.type === type ? blob : null;
-                  } catch {
-                    return null;
-                  }
-                };
-
-                const encodeScaledBlob = async (sourceCanvas, type, quality, scale) => {
-                  if (scale >= 1) {
-                    return encodeBlob(sourceCanvas, type, quality);
-                  }
-
-                  const scaledWidth = Math.max(1, Math.round(sourceCanvas.width * scale));
-                  const scaledHeight = Math.max(1, Math.round(sourceCanvas.height * scale));
-                  const scaledCanvas = new OffscreenCanvas(scaledWidth, scaledHeight);
-                  const scaledContext = scaledCanvas.getContext("2d");
-                  scaledContext.drawImage(sourceCanvas, 0, 0, scaledWidth, scaledHeight);
-                  const blob = await encodeBlob(scaledCanvas, type, quality);
-                  scaledCanvas.width = 1;
-                  scaledCanvas.height = 1;
-                  return blob;
-                };
-
-                pngBlob = await canvas.convertToBlob({ type: "image/png" });
-                // Keep good visual quality while reducing "compressed" result size.
+                // Encode PNG and preview WebP in parallel — both read from the same
+                // immutable canvas pixels so there is no data hazard.
                 const WEBP_PREVIEW_QUALITY = 0.86;
-                webpBlob = await encodeBlob(canvas, "image/webp", WEBP_PREVIEW_QUALITY);
+                const [pngBlob, webpBlob] = await Promise.all([
+                  canvas.convertToBlob({ type: "image/png" }),
+                  canvas.convertToBlob({ type: "image/webp", quality: WEBP_PREVIEW_QUALITY })
+                    .then((b) => (b.type === "image/webp" ? b : null))
+                    .catch(() => null),
+                ]);
 
                 // Generate minimal blob from more aggressive lossy candidates.
-                const minCandidates = [];
                 // ~20MP raw RGBA is about 80MB, which is where browser memory pressure rises.
                 const HUGE_CANVAS_PIXEL_THRESHOLD = 20_000_000;
                 // Very large canvases are memory heavy in browsers, so also try
                 // downscaled candidates when the output exceeds ~20 MP.
                 const isHugeOutput = canvasWidth * canvasHeight > HUGE_CANVAS_PIXEL_THRESHOLD;
-                const STANDARD_SCALES = [1, 0.9];
-                const HUGE_CANVAS_SCALES = [1, 0.9, 0.8];
-                const scaleCandidates = isHugeOutput ? HUGE_CANVAS_SCALES : STANDARD_SCALES;
+                const scaleCandidates = isHugeOutput ? [1, 0.9, 0.8] : [1, 0.9];
                 // Quality ladders are stepped from visually acceptable down to
                 // aggressive compression, then we pick the smallest output.
                 const lossyTargets = [
@@ -1027,17 +1014,53 @@
                   { type: "image/webp", qualities: [0.68, 0.56, 0.46], ext: "webp" },
                 ];
 
+                // C memory-pool pattern: allocate one scaled canvas per resolution
+                // level and reuse it for every format×quality encoding at that scale.
+                // This keeps peak allocation to (output canvas + 1 scale canvas) instead
+                // of (output canvas + N canvases for N format×quality combos).
+                const minCandidates = [];
                 for (const scale of scaleCandidates) {
-                  for (const target of lossyTargets) {
-                    for (const quality of target.qualities) {
-                      const blob = await encodeScaledBlob(canvas, target.type, quality, scale);
-                      if (blob) {
-                        minCandidates.push({ blob, ext: target.ext });
-                      }
-                    }
+                  let pool = null;
+
+                  if (scale < 1) {
+                    const sw = Math.max(1, Math.round(canvasWidth * scale));
+                    const sh = Math.max(1, Math.round(canvasHeight * scale));
+                    pool = new OffscreenCanvas(sw, sh);
+                    const poolCtx = pool.getContext("2d", { willReadFrequently: false });
+                    // High-quality Lanczos-like downscale via the browser compositor.
+                    poolCtx.imageSmoothingEnabled = true;
+                    poolCtx.imageSmoothingQuality = "high";
+                    poolCtx.drawImage(canvas, 0, 0, sw, sh);
+                  }
+
+                  const src = pool ?? canvas;
+
+                  // Encode all format×quality combos for this scale concurrently —
+                  // they all read from the same immutable src pixels (no data hazard).
+                  const results = await Promise.all(
+                    lossyTargets.flatMap(({ type, qualities, ext }) =>
+                      qualities.map((quality) =>
+                        src.convertToBlob({ type, quality })
+                          .then((b) => (b.type === type ? { blob: b, ext } : null))
+                          .catch(() => null)
+                      )
+                    )
+                  );
+
+                  for (const r of results) {
+                    if (r) minCandidates.push(r);
+                  }
+
+                  // Immediately free the pooled canvas (C-style explicit free).
+                  if (pool) {
+                    pool.width = 1;
+                    pool.height = 1;
+                    pool = null;
                   }
                 }
 
+                let minBlob = null;
+                let minType = null;
                 if (minCandidates.length > 0) {
                   const smallest = minCandidates.reduce((a, b) => (a.blob.size < b.blob.size ? a : b));
                   minBlob = smallest.blob;
