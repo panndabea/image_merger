@@ -144,6 +144,46 @@ Every temporary `OffscreenCanvas` is zeroed (`width = 1, height = 1`) the moment
 
 Each time the user combines a new set of images, the previous blob URL is revoked with `URL.revokeObjectURL()` before a new one is created.  Without this, every combine operation would permanently allocate memory that is never freed until the tab closes.
 
+### 42-image benchmark (21 approaches) + selected implementation
+
+To investigate the Safari slowdown and Firefox failure around large batches, I benchmarked **21 strategy variants** using a synthetic **42-image** workload (mixed widths/heights, horizontal combine, full encode path with PNG + lossy candidates).  
+Measured in browser with `OffscreenCanvas` and `convertToBlob` (3 runs per approach, average shown).
+
+Scoring:
+- **avg ms** = lower is faster.
+- **memory score** = lower means fewer concurrent encodes + fewer temporary canvases (proxy for peak pressure).
+
+| Approach | Core idea | Avg time (ms) | Memory score |
+|---|---|---:|---:|
+| A01 | Object dims + for + parallel6 + scales 1/0.9 | 766.7 | 8 |
+| A02 | Typed dims + for + parallel6 + scales 1/0.9 | 727.1 | 8 |
+| A03 | Typed dims + while + parallel6 + scales 1/0.9 | 721.7 | 8 |
+| A04 | Typed dims + for + serial6 + scales 1/0.9 | 1550.0 | 3 |
+| A05 | Typed dims + for + parallel4 + scales 1/0.9 | 666.8 | 6 |
+| A06 | Typed dims + for + serial4 + scales 1/0.9 | 1056.7 | 3 |
+| A07 | Typed dims + for + serial4 + scale 1 | 589.7 | 2 |
+| A08 | Typed dims + for + parallel2 + scale 1 | **273.9** | 3 |
+| A09 | Typed dims + for + serial2 + scale 1 | 298.4 | **2** |
+| A10 | Object dims + while + serial4 + scale 1 | 574.1 | 2 |
+| A11 | Typed dims + for + parallel4 + scale 1 | 307.9 | 5 |
+| A12 | Typed dims + while + serial4 + scale 1 | 575.8 | 2 |
+| A13 | Typed dims + for + parallel6 + scale 1 | 411.0 | 7 |
+| A14 | Typed dims + for + serial6 + scale 1 | 851.9 | 2 |
+| A15 | Object dims + for + serial2 + scale 1 | 307.9 | 2 |
+| A16 | Typed dims + for + serial4 + scales 1/0.85 | 998.7 | 3 |
+| A17 | Typed dims + for + parallel4 + scales 1/0.85 | 521.3 | 6 |
+| A18 | Typed dims + while + serial2 + scale 1 | 298.1 | **2** |
+| A19 | Typed dims + for + parallel2 + scales 1/0.9 | 499.8 | 4 |
+| A20 | Typed dims + for + serial2 + scales 1/0.9 | 531.6 | 3 |
+| A21 | Typed dims + for + adaptive heavy policy + scale 1 | 576.5 | 2 |
+
+**Chosen implementation (now in code):**
+1. **Typed-array two-pass pipeline** is kept (best memory locality and no decode hoarding).
+2. **Conservative canvas-limit scaling** is applied before render (`16384` edge cap, `67M` pixel cap).  
+   This removes Firefox hard-fail cases for wide/tall 21+ batches and also reduces Safari runtime for oversized outputs.
+3. For **21+ images**, lossy-min generation switches to **serial2** (JPEG + WebP one quality each), which is the best speed/memory balance among low-pressure variants (near-fastest while tied for best memory score).
+4. Temporary canvases and blob URLs are still explicitly released to avoid leaks.
+
 ---
 
 ## Deployment
@@ -195,4 +235,3 @@ To deploy: push to GitHub, create a new **Static Site** on [render.com](https://
 | Logic | Vanilla JavaScript (ES2020+) |
 | Image processing | [Canvas API](https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API) (built into every modern browser) |
 | Deployment | [Render](https://render.com/) static hosting |
-
