@@ -967,7 +967,7 @@
                 // Keep output within conservative cross-browser canvas limits so
                 // large image batches still work in Firefox/Safari.
                 const MAX_CANVAS_EDGE = 16384;
-                const MAX_CANVAS_PIXELS = 67_000_000;
+                const MAX_CANVAS_PIXELS = 67000000;
                 const edgeScale = Math.min(
                   1,
                   MAX_CANVAS_EDGE / sourceCanvasWidth,
@@ -1026,6 +1026,8 @@
                 // Very large canvases are memory heavy in browsers, so also try
                 // downscaled candidates when the output exceeds ~20 MP.
                 const isHugeOutput = canvasWidth * canvasHeight > HUGE_CANVAS_PIXEL_THRESHOLD;
+                // Benchmarks in README used 42-image workloads and showed that
+                // batches at/above 21 images benefit from a lower-pressure encode path.
                 const isLargeBatch = files.length >= 21;
                 const scaleCandidates = isLargeBatch
                   ? (isHugeOutput ? [1, 0.9] : [1])
@@ -1034,6 +1036,7 @@
                 // aggressive compression, then we pick the smallest output.
                 const lossyTargets = isLargeBatch
                   ? [
+                    // Benchmarked heavy-batch quality pair: best speed/memory trade-off.
                     { type: "image/jpeg", qualities: [0.70], ext: "jpg" },
                     { type: "image/webp", qualities: [0.62], ext: "webp" },
                   ]
