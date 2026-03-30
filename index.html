@@ -629,7 +629,7 @@
         const fragment = document.createDocumentFragment();
         for (const file of resultFiles) {
           files.push(file);
-          fragment.appendChild(renderThumb(file, files.length - 1));
+          fragment.appendChild(createThumb(file, files.length - 1));
         }
         previewGrid.appendChild(fragment);
 
@@ -643,7 +643,7 @@
        * @param {number} index
        * @returns {HTMLDivElement}
        */
-      function renderThumb(file, index) {
+      function createThumb(file, index) {
         const thumbnailUrl = URL.createObjectURL(file);
 
         const thumbWrap = document.createElement("div");
