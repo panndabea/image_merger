@@ -1,8 +1,8 @@
-# zaladuplo
+# image_merger
 
 > **Upload multiple images → get one combined PNG back — instantly, in your browser.**
 
-zaladuplo is a **pure static web app** — no server, no build step, no Node.js.  
+image_merger is a **pure static web app** — no server, no build step, no Node.js.  
 Users pick any number of images through a drag-and-drop UI, choose a layout (horizontal or vertical), and receive a lossless PNG they can preview and **download** with one click.  
 All image processing happens locally in the browser using the built-in [Canvas API](https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API) — your files are never uploaded anywhere.
 
@@ -76,10 +76,8 @@ Then open **http://localhost:3000** in your browser.
 ## Project Structure
 
 ```
-zaladuplo/
-├── public/
-│   └── index.html   # The entire app — HTML + CSS + vanilla JS in one file
-├── render.yaml      # Render.com static-site deployment manifest
+image_merger/
+├── index.html       # The entire app — HTML + CSS + vanilla JS in one file
 └── README.md
 ```
 
@@ -179,7 +177,7 @@ Scoring:
 
 **Chosen implementation (now in code):**
 1. **Typed-array two-pass pipeline** is kept (best memory locality and no decode hoarding).
-2. **Conservative canvas-limit scaling** is applied before render (`16384` edge cap, `67M` pixel cap).  
+2. **Conservative canvas-limit scaling** is applied before compositing (`16384` edge cap, `67M` pixel cap).  
    This removes Firefox hard-fail cases for wide/tall 21+ batches and also reduces Safari runtime for oversized outputs.
 3. For **21+ images**, lossy-min generation switches to **serial2** (JPEG + WebP one quality each), which is the best speed/memory balance among low-pressure variants (near-fastest while tied for best memory score).
 4. Temporary canvases and blob URLs are still explicitly released to avoid leaks.
@@ -194,22 +192,7 @@ Because the app is a single static HTML file, it can be hosted anywhere:
 |----------|-----|
 | **GitHub Pages** | Push to a repo → enable Pages → point to the `public/` folder (or root) |
 | **Netlify / Vercel** | Connect repo → set publish directory to `public` |
-| **Render** | `render.yaml` is already configured for static hosting |
 | **Any CDN** | Upload `public/index.html` |
-
-### Render
-
-The `render.yaml` at the project root is a [Render Blueprint](https://render.com/docs/blueprint-spec):
-
-```yaml
-services:
-  - type: web
-    name: zaladuplo
-    runtime: static
-    staticPublishPath: public
-```
-
-To deploy: push to GitHub, create a new **Static Site** on [render.com](https://render.com), and connect the repo — no build command needed.
 
 ---
 
@@ -234,4 +217,4 @@ To deploy: push to GitHub, create a new **Static Site** on [render.com](https://
 | UI | Plain HTML5 + CSS3 |
 | Logic | Vanilla JavaScript (ES2020+) |
 | Image processing | [Canvas API](https://developer.mozilla.org/en-US/docs/Web/API/Canvas_API) (built into every modern browser) |
-| Deployment | [Render](https://render.com/) static hosting |
+| Deployment | Any static file host (GitHub Pages, Netlify, Vercel, CDN, etc.) |

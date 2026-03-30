@@ -1,5 +1,0 @@
-services:
-  - type: web
-    name: silver-engine
-    runtime: static
-    staticPublishPath: public
